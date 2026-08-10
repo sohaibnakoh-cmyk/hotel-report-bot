@@ -1,7 +1,9 @@
 import os
 import re
 import asyncio
+import threading
 from io import BytesIO
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update
 from telegram.ext import (
@@ -13,28 +15,500 @@ from telegram.ext import (
 )
 
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 
 TOKEN = os.getenv("BOT_TOKEN")
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==========================================
+# خادم بسيط لـ Render حتى يتم فتح PORT
+# ==========================================
+
+class HealthHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(
+            "Hotel Report Bot is running".encode()
+        )
+
+    def log_message(self, format, *args):
+        pass
+
+
+def run_web_server():
+
+    port = int(
+        os.environ.get("PORT", 10000)
+    )
+
+    server = HTTPServer(
+        ("0.0.0.0", port),
+        HealthHandler
+    )
+
+    print(f"Web server running on port {port}")
+
+    server.serve_forever()
+
+
+# ==========================================
+# أمر START
+# ==========================================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     await update.message.reply_text(
         "مرحباً بك في بوت تقارير الفنادق 📋\n\n"
         "أرسل بيانات نزيل واحد أو عدة نزلاء دفعة واحدة.\n\n"
-        "بعد الإرسال سيقوم البوت بـ:\n"
+        "بعد إرسال البيانات سيقوم البوت بـ:\n"
         "✅ استخراج البيانات تلقائياً\n"
         "✅ ترتيب بيانات النزلاء\n"
         "✅ إنشاء ملف PDF\n"
         "✅ إرسال ملف PDF إليك\n\n"
-        "ضع بين كل نزيل وآخر:\n"
+        "ضع بين كل نزيل وآخر هذا الفاصل:\n"
         "===================="
     )
 
 
+# ==========================================
+# استخراج قيمة حقل من النص
+# ==========================================
+
+def extract_value(text, field):
+
+    patterns = [
+        rf"{re.escape(field)}\s*[:：]\s*(.+)",
+        rf"{re.escape(field)}\s*[-–]\s*(.+)",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            flags=re.IGNORECASE
+        )
+
+        if match:
+            return match.group(1).strip()
+
+    return "غير مذكور"
+
+
+# ==========================================
+# تنظيف الترقيم
+# ==========================================
+
+def clean_text(text):
+
+    return re.sub(
+        r"^\s*\d+\s*[-.)]\s*",
+        "",
+        text,
+        flags=re.MULTILINE
+    )
+
+
+# ==========================================
+# استخراج بيانات نزيل واحد
+# ==========================================
+
+def parse_guest(text):
+
+    text = clean_text(text)
+
+    fields = {
+
+        "الاسم الثلاثي": [
+            "الاسم الثلاثي",
+            "الاسم"
+        ],
+
+        "اسم الأم": [
+            "اسم الأم",
+            "اسم الام"
+        ],
+
+        "مكان وتاريخ الولادة": [
+            "مكان وتاريخ الولادة"
+        ],
+
+        "السكن الأصلي": [
+            "السكن الأصلي",
+            "السكن الاصلي"
+        ],
+
+        "المحافظة": [
+            "المحافظة"
+        ],
+
+        "اسم الفندق": [
+            "اسم الفندق",
+            "الفندق"
+        ],
+
+        "رقم الجناح": [
+            "رقم الجناح",
+            "الجناح"
+        ],
+
+        "رقم الغرفة": [
+            "رقم الغرفة",
+            "الغرفة"
+        ],
+
+        "تاريخ النزول": [
+            "تاريخ النزول",
+            "تاريخ الدخول"
+        ],
+
+        "مدة الإقامة": [
+            "مدة الإقامة",
+            "مدة الاقامة"
+        ],
+
+        "سبب الإقامة": [
+            "سبب الإقامة",
+            "سبب الاقامة"
+        ],
+    }
+
+    data = {}
+
+    for key, possible_names in fields.items():
+
+        value = "غير مذكور"
+
+        for field_name in possible_names:
+
+            value = extract_value(
+                text,
+                field_name
+            )
+
+            if value != "غير مذكور":
+                break
+
+        data[key] = value
+
+    return data
+
+
+# ==========================================
+# تقسيم الرسالة إلى عدة نزلاء
+# ==========================================
+
+def split_guests(text):
+
+    guests = re.split(
+        r"\n\s*(?:={3,}|-{3,}|\*{3,})\s*\n",
+        text
+    )
+
+    return [
+        guest.strip()
+        for guest in guests
+        if guest.strip()
+    ]
+
+
+# ==========================================
+# إنشاء ملف PDF
+# ==========================================
+
+def create_pdf(guests_data):
+
+    buffer = BytesIO()
+
+    pdf = canvas.Canvas(
+        buffer,
+        pagesize=A4
+    )
+
+    width, height = A4
+
+    y = height - 50
+
+    # عنوان التقرير
+    pdf.setFont(
+        "Helvetica-Bold",
+        16
+    )
+
+    pdf.drawCentredString(
+        width / 2,
+        y,
+        "HOTEL GUESTS REPORT"
+    )
+
+    y -= 40
+
+    # عدد النزلاء
+    pdf.setFont(
+        "Helvetica",
+        12
+    )
+
+    pdf.drawString(
+        50,
+        y,
+        f"Total Guests: {len(guests_data)}"
+    )
+
+    y -= 35
+
+    # بيانات النزلاء
+    for number, guest in enumerate(
+        guests_data,
+        start=1
+    ):
+
+        # صفحة جديدة عند الحاجة
+        if y < 150:
+
+            pdf.showPage()
+
+            y = height - 50
+
+        # رقم النزيل
+        pdf.setFont(
+            "Helvetica-Bold",
+            14
+        )
+
+        pdf.drawString(
+            50,
+            y,
+            f"Guest No. {number}"
+        )
+
+        y -= 25
+
+        # البيانات
+        pdf.setFont(
+            "Helvetica",
+            10
+        )
+
+        for key, value in guest.items():
+
+            if y < 80:
+
+                pdf.showPage()
+
+                y = height - 50
+
+            # تحويل أسماء الحقول للإنجليزية داخل PDF
+            english_names = {
+
+                "الاسم الثلاثي": "Full Name",
+                "اسم الأم": "Mother Name",
+                "مكان وتاريخ الولادة": "Place and Date of Birth",
+                "السكن الأصلي": "Original Residence",
+                "المحافظة": "Governorate",
+                "اسم الفندق": "Hotel Name",
+                "رقم الجناح": "Suite Number",
+                "رقم الغرفة": "Room Number",
+                "تاريخ النزول": "Check-in Date",
+                "مدة الإقامة": "Duration of Stay",
+                "سبب الإقامة": "Reason for Stay",
+
+            }
+
+            field_name = english_names.get(
+                key,
+                key
+            )
+
+            line = (
+                f"{field_name}: {value}"
+            )
+
+            # منع تجاوز السطر
+            if len(line) > 100:
+                line = line[:100]
+
+            pdf.drawString(
+                50,
+                y,
+                line
+            )
+
+            y -= 18
+
+        # خط فاصل
+        y -= 5
+
+        pdf.line(
+            50,
+            y,
+            width - 50,
+            y
+        )
+
+        y -= 25
+
+    # حفظ PDF
+    pdf.save()
+
+    buffer.seek(0)
+
+    return buffer
+
+
+# ==========================================
+# استقبال بيانات النزلاء
+# ==========================================
+
+async def receive_data(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    text = update.message.text
+
+    # تقسيم النزلاء
+    guests_text = split_guests(text)
+
+    if not guests_text:
+
+        await update.message.reply_text(
+            "❌ لم يتم العثور على بيانات نزلاء."
+        )
+
+        return
+
+    # استخراج البيانات
+    guests_data = []
+
+    for guest_text in guests_text:
+
+        guest_data = parse_guest(
+            guest_text
+        )
+
+        guests_data.append(
+            guest_data
+        )
+
+    # رسالة أثناء المعالجة
+    await update.message.reply_text(
+        f"⏳ جاري معالجة بيانات "
+        f"{len(guests_data)} نزيل..."
+    )
+
+    # إنشاء PDF
+    pdf_file = create_pdf(
+        guests_data
+    )
+
+    # إرسال ملف PDF
+    await update.message.reply_document(
+        document=pdf_file,
+        filename="hotel_guests_report.pdf",
+        caption=(
+            "📋 تقرير نزلاء الفنادق\n\n"
+            f"عدد النزلاء: "
+            f"{len(guests_data)}\n\n"
+            "تم إنشاء التقرير بنجاح ✅"
+        )
+    )
+
+
+# ==========================================
+# إلغاء
+# ==========================================
+
+async def cancel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+        "تم إلغاء العملية."
+    )
+
+
+# ==========================================
+# إنشاء التطبيق
+# ==========================================
+
+app = ApplicationBuilder().token(
+    TOKEN
+).build()
+
+
+# أمر البدء
+app.add_handler(
+    CommandHandler(
+        "start",
+        start
+    )
+)
+
+
+# أمر الإلغاء
+app.add_handler(
+    CommandHandler(
+        "cancel",
+        cancel
+    )
+)
+
+
+# استقبال جميع الرسائل النصية
+app.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        receive_data
+    )
+)
+
+
+# ==========================================
+# تشغيل البوت وRender
+# ==========================================
+
+async def main():
+
+    # تشغيل خادم الويب في الخلفية
+    threading.Thread(
+        target=run_web_server,
+        daemon=True
+    ).start()
+
+    print("Starting Telegram Bot...")
+
+    await app.initialize()
+
+    await app.start()
+
+    await app.updater.start_polling()
+
+    print("Telegram Bot is running successfully!")
+
+    try:
+
+        await asyncio.Event().wait()
+
+    finally:
+
+        await app.updater.stop()
+
+        await app.stop()
+
+        await app.shutdown()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 def extract_value(text, field):
     """
     استخراج قيمة الحقل من النص.
