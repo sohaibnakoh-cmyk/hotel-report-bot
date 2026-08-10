@@ -17,54 +17,100 @@ from telegram.ext import (
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 import arabic_reshaper
 from bidi.algorithm import get_display
 
 
 # =========================================================
-# إعدادات
+# TOKEN
 # =========================================================
 
 TOKEN = os.getenv("BOT_TOKEN")
+
+
+# =========================================================
+# إعدادات الصفحة
+# =========================================================
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
 
 
 # =========================================================
-# البحث عن خط عربي في Render
+# البحث عن الخط العربي
 # =========================================================
 
 def find_arabic_font():
 
-    possible_fonts = [
+    fonts = [
 
-        # DejaVu
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+
         "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
 
-        # Noto
         "/usr/share/fonts/opentype/noto/NotoSansArabic-Regular.ttf",
+
         "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
 
-        # Liberation
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
 
     ]
 
-    for font_path in possible_fonts:
+    for font in fonts:
 
-        if os.path.exists(font_path):
-            return font_path
+        if os.path.exists(font):
+            return font
 
     return None
 
 
-ARABIC_FONT = find_arabic_font()
+ARABIC_FONT_PATH = find_arabic_font()
 
 
 # =========================================================
-# تحويل النص العربي إلى شكل مناسب لـ PDF
+# تسجيل الخط
+# =========================================================
+
+if ARABIC_FONT_PATH:
+
+    try:
+
+        pdfmetrics.registerFont(
+            TTFont(
+                "ArabicFont",
+                ARABIC_FONT_PATH
+            )
+        )
+
+        PDF_FONT = "ArabicFont"
+
+        print(
+            "Arabic font found:",
+            ARABIC_FONT_PATH
+        )
+
+    except Exception as e:
+
+        print(
+            "Arabic font registration error:",
+            e
+        )
+
+        PDF_FONT = "Helvetica"
+
+else:
+
+    print(
+        "WARNING: Arabic font not found"
+    )
+
+    PDF_FONT = "Helvetica"
+
+
+# =========================================================
+# معالجة النص العربي
 # =========================================================
 
 def arabic_text(text):
@@ -72,10 +118,12 @@ def arabic_text(text):
     if not text:
         return ""
 
+    text = str(text)
+
     try:
 
         reshaped = arabic_reshaper.reshape(
-            str(text)
+            text
         )
 
         return get_display(
@@ -84,176 +132,73 @@ def arabic_text(text):
 
     except Exception:
 
-        return str(text)
+        return text
 
 
 # =========================================================
-# خادم Render
+# تنظيف اسم الملف
 # =========================================================
 
-class HealthHandler(BaseHTTPRequestHandler):
+def safe_filename(name):
 
-    def do_GET(self):
+    if not name:
 
-        self.send_response(200)
+        name = "تقرير_نزيل"
 
-        self.send_header(
-            "Content-type",
-            "text/plain"
-        )
-
-        self.end_headers()
-
-        self.wfile.write(
-            b"Hotel Report Bot is running"
-        )
-
-    def log_message(self, format, *args):
-        pass
-
-
-def run_web_server():
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            10000
-        )
+    # إزالة الرموز التي لا يسمح بها اسم الملف
+    name = re.sub(
+        r'[\\/:*?"<>|]',
+        "",
+        name
     )
 
-    server = HTTPServer(
-        ("0.0.0.0", port),
-        HealthHandler
+    # إزالة الفراغات الزائدة
+    name = re.sub(
+        r"\s+",
+        "_",
+        name.strip()
     )
 
-    print(
-        f"Render web server running on port {port}"
-    )
+    if not name:
 
-    server.serve_forever()
+        name = "تقرير_نزيل"
+
+    return name + ".pdf"
 
 
 # =========================================================
-# تسجيل الخط
+# استخراج البيانات
 # =========================================================
 
-def setup_font(pdf):
+def extract_value(text, names):
 
-    if ARABIC_FONT:
+    for field in names:
 
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
+        patterns = [
 
-        try:
+            rf"{re.escape(field)}\s*[:：]\s*(.+)",
 
-            pdfmetrics.registerFont(
-                TTFont(
-                    "ArabicFont",
-                    ARABIC_FONT
-                )
+            rf"{re.escape(field)}\s*[-–]\s*(.+)",
+
+        ]
+
+        for pattern in patterns:
+
+            match = re.search(
+                pattern,
+                text,
+                flags=re.IGNORECASE
             )
 
-            return "ArabicFont"
+            if match:
 
-        except Exception as e:
+                value = match.group(1).strip()
 
-            print(
-                "Font error:",
-                e
-            )
+                if value:
 
-    return "Helvetica"
-
-
-# =========================================================
-# START
-# =========================================================
-
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    await update.message.reply_text(
-
-        "مرحباً بك في بوت تقارير الفنادق 📋\n\n"
-
-        "يمكنك إرسال:\n"
-        "• رسالة نصية\n"
-        "• رسالة محولة من مجموعة\n"
-        "• صورة مع نص\n"
-        "• عدة نزلاء في رسالة واحدة\n\n"
-
-        "سيقوم البوت باستخراج البيانات وإنشاء PDF تلقائياً.\n\n"
-
-        "الحقول المطلوبة:\n"
-        "الاسم الثلاثي\n"
-        "اسم الأم\n"
-        "مكان وتاريخ الولادة\n"
-        "السكن الأصلي\n"
-        "المحافظة\n"
-        "اسم الفندق\n"
-        "رقم الجناح\n"
-        "رقم الغرفة\n"
-        "تاريخ النزول\n"
-        "مدة الإقامة\n"
-        "سبب الإقامة\n\n"
-
-        "يمكن وضع هذا الفاصل بين النزلاء:\n"
-        "===================="
-
-    )
-
-
-# =========================================================
-# استخراج قيمة حقل
-# =========================================================
-
-def extract_value(
-    text,
-    field
-):
-
-    patterns = [
-
-        rf"{re.escape(field)}\s*[:：]\s*(.+)",
-
-        rf"{re.escape(field)}\s*[-–]\s*(.+)",
-
-    ]
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            text,
-            flags=re.IGNORECASE
-        )
-
-        if match:
-
-            return match.group(1).strip()
+                    return value
 
     return "غير مذكور"
-
-
-# =========================================================
-# تنظيف النص
-# =========================================================
-
-def clean_text(text):
-
-    return re.sub(
-
-        r"^\s*\d+\s*[-.)]\s*",
-
-        "",
-
-        text,
-
-        flags=re.MULTILINE
-
-    )
 
 
 # =========================================================
@@ -261,8 +206,6 @@ def clean_text(text):
 # =========================================================
 
 def parse_guest(text):
-
-    text = clean_text(text)
 
     fields = {
 
@@ -322,25 +265,16 @@ def parse_guest(text):
 
     }
 
-    data = {}
+    result = {}
 
     for key, names in fields.items():
 
-        value = "غير مذكور"
+        result[key] = extract_value(
+            text,
+            names
+        )
 
-        for name in names:
-
-            value = extract_value(
-                text,
-                name
-            )
-
-            if value != "غير مذكور":
-                break
-
-        data[key] = value
-
-    return data
+    return result
 
 
 # =========================================================
@@ -349,7 +283,7 @@ def parse_guest(text):
 
 def split_guests(text):
 
-    guests = re.split(
+    parts = re.split(
 
         r"\n\s*(?:={3,}|-{3,}|\*{3,})\s*\n",
 
@@ -359,39 +293,105 @@ def split_guests(text):
 
     return [
 
-        guest.strip()
+        part.strip()
 
-        for guest in guests
+        for part in parts
 
-        if guest.strip()
+        if part.strip()
 
     ]
 
 
 # =========================================================
-# كتابة النص العربي داخل PDF
+# خادم Render
 # =========================================================
 
-def draw_rtl_text(
-    pdf,
-    text,
-    x,
-    y,
-    font_name,
-    font_size=11
+class HealthHandler(
+    BaseHTTPRequestHandler
 ):
 
-    pdf.setFont(
-        font_name,
-        font_size
+    def do_GET(self):
+
+        self.send_response(200)
+
+        self.send_header(
+            "Content-type",
+            "text/plain"
+        )
+
+        self.end_headers()
+
+        self.wfile.write(
+            b"Hotel Report Bot is running"
+        )
+
+    def log_message(
+        self,
+        format,
+        *args
+    ):
+
+        pass
+
+
+def run_web_server():
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            "10000"
+        )
     )
 
-    text = arabic_text(text)
+    server = HTTPServer(
+        ("0.0.0.0", port),
+        HealthHandler
+    )
 
-    pdf.drawRightString(
-        x,
-        y,
-        text
+    print(
+        f"Web server running on port {port}"
+    )
+
+    server.serve_forever()
+
+
+# =========================================================
+# START
+# =========================================================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+
+        "مرحباً بك في بوت تقارير الفنادق 📋\n\n"
+
+        "أرسل رسالة النزيل مباشرة أو قم بعمل "
+        "Forward لرسالة من مجموعة.\n\n"
+
+        "يمكن أن تحتوي الرسالة على صورة مع البيانات.\n\n"
+
+        "سيتم إنشاء ملف PDF باسم النزيل تلقائياً.\n\n"
+
+        "الحقول:\n"
+
+        "1- الاسم الثلاثي\n"
+        "2- اسم الأم\n"
+        "3- مكان وتاريخ الولادة\n"
+        "4- السكن الأصلي\n"
+        "5- المحافظة\n"
+        "6- اسم الفندق\n"
+        "7- رقم الجناح\n"
+        "8- رقم الغرفة\n"
+        "9- تاريخ النزول\n"
+        "10- مدة الإقامة\n"
+        "11- سبب الإقامة\n\n"
+
+        "لعدة نزلاء استخدم:\n"
+        "===================="
+
     )
 
 
@@ -400,12 +400,9 @@ def draw_rtl_text(
 # =========================================================
 
 def create_pdf(
-    guests_data,
-    images=None
+    guest,
+    image_data=None
 ):
-
-    if images is None:
-        images = []
 
     buffer = BytesIO()
 
@@ -414,172 +411,166 @@ def create_pdf(
         pagesize=A4
     )
 
-    font_name = setup_font(pdf)
+    y = PAGE_HEIGHT - 50
 
     # -----------------------------------------------------
     # العنوان
     # -----------------------------------------------------
 
-    y = PAGE_HEIGHT - 50
-
-    draw_rtl_text(
-        pdf,
-        "مكتب أمن الفنادق والعقارات",
-        PAGE_WIDTH - 50,
-        y,
-        font_name,
+    pdf.setFont(
+        PDF_FONT,
         18
     )
 
-    y -= 30
+    pdf.drawRightString(
 
-    draw_rtl_text(
-        pdf,
-        "تقرير نزلاء الفنادق",
         PAGE_WIDTH - 50,
+
         y,
-        font_name,
+
+        arabic_text(
+            "مكتب أمن الفنادق والعقارات"
+        )
+
+    )
+
+    y -= 35
+
+    pdf.setFont(
+        PDF_FONT,
         15
     )
 
-    y -= 35
+    pdf.drawRightString(
 
-    draw_rtl_text(
-        pdf,
-        f"عدد النزلاء: {len(guests_data)}",
         PAGE_WIDTH - 50,
+
         y,
-        font_name,
+
+        arabic_text(
+            "تقرير نزيل فندق"
+        )
+
+    )
+
+    y -= 40
+
+    # -----------------------------------------------------
+    # بيانات النزيل
+    # -----------------------------------------------------
+
+    pdf.setFont(
+        PDF_FONT,
         11
     )
 
-    y -= 35
+    for key, value in guest.items():
 
-    # -----------------------------------------------------
-    # بيانات النزلاء
-    # -----------------------------------------------------
-
-    for number, guest in enumerate(
-        guests_data,
-        start=1
-    ):
-
-        if y < 180:
+        # إذا اقتربنا من نهاية الصفحة
+        if y < 120:
 
             pdf.showPage()
 
-            font_name = setup_font(pdf)
+            pdf.setFont(
+                PDF_FONT,
+                11
+            )
 
             y = PAGE_HEIGHT - 50
 
-        # عنوان النزيل
+        line = f"{key}: {value}"
 
-        draw_rtl_text(
-            pdf,
-            f"النزيل رقم {number}",
+        pdf.drawRightString(
+
             PAGE_WIDTH - 50,
+
             y,
-            font_name,
-            14
+
+            arabic_text(
+                line
+            )
+
         )
 
-        y -= 28
+        y -= 25
 
-        # البيانات
+    # -----------------------------------------------------
+    # الصورة
+    # -----------------------------------------------------
 
-        for key, value in guest.items():
+    if image_data:
 
-            if y < 80:
+        try:
+
+            image_data.seek(0)
+
+            image = ImageReader(
+                image_data
+            )
+
+            img_width = 250
+            img_height = 190
+
+            if y < img_height + 60:
 
                 pdf.showPage()
 
-                font_name = setup_font(pdf)
+                pdf.setFont(
+                    PDF_FONT,
+                    11
+                )
 
                 y = PAGE_HEIGHT - 50
 
-            line = f"{key}: {value}"
+            pdf.drawImage(
 
-            draw_rtl_text(
-                pdf,
-                line,
-                PAGE_WIDTH - 50,
-                y,
-                font_name,
-                10
-            )
+                image,
 
-            y -= 20
-
-        # -------------------------------------------------
-        # صورة النزيل
-        # -------------------------------------------------
-
-        if number <= len(images):
-
-            image_data = images[number - 1]
-
-            if image_data:
-
-                try:
-
-                    image_data.seek(0)
-
-                    image = ImageReader(
-                        image_data
-                    )
-
-                    img_width = 220
-                    img_height = 165
-
-                    if y < img_height + 50:
-
-                        pdf.showPage()
-
-                        font_name = setup_font(pdf)
-
-                        y = PAGE_HEIGHT - 50
-
-                    pdf.drawImage(
-
-                        image,
-
-                        50,
-
-                        y - img_height,
-
-                        width=img_width,
-
-                        height=img_height,
-
-                        preserveAspectRatio=True,
-
-                        anchor="sw"
-
-                    )
-
-                    y -= (
-                        img_height + 25
-                    )
-
-                except Exception as e:
-
-                    print(
-                        "Image error:",
-                        e
-                    )
-
-        # خط فاصل
-
-        if y > 50:
-
-            pdf.line(
                 50,
-                y,
-                PAGE_WIDTH - 50,
-                y
+
+                y - img_height,
+
+                width=img_width,
+
+                height=img_height,
+
+                preserveAspectRatio=True,
+
+                anchor="sw"
+
             )
 
-            y -= 25
+            y -= (
+                img_height + 30
+            )
+
+        except Exception as e:
+
+            print(
+                "Image error:",
+                e
+            )
+
+    # -----------------------------------------------------
+    # نهاية التقرير
+    # -----------------------------------------------------
+
+    pdf.setFont(
+        PDF_FONT,
+        9
+    )
+
+    pdf.drawRightString(
+
+        PAGE_WIDTH - 50,
+
+        35,
+
+        arabic_text(
+            "تم إنشاء التقرير بواسطة بوت تقارير الفنادق"
+        )
+
+    )
 
     pdf.save()
 
@@ -589,24 +580,26 @@ def create_pdf(
 
 
 # =========================================================
-# تحميل صورة من Telegram
+# تحميل صورة Telegram
 # =========================================================
 
-async def download_photo(
+async def get_photo(
     update
 ):
 
-    if not update.message:
+    message = update.message
+
+    if not message:
 
         return None
 
-    if not update.message.photo:
+    if not message.photo:
 
         return None
 
     try:
 
-        photo = update.message.photo[-1]
+        photo = message.photo[-1]
 
         telegram_file = await photo.get_file()
 
@@ -631,7 +624,7 @@ async def download_photo(
 
 
 # =========================================================
-# معالجة الرسائل
+# معالجة رسالة Forward
 # =========================================================
 
 async def process_message(
@@ -639,26 +632,36 @@ async def process_message(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    if not update.message:
+    message = update.message
+
+    if not message:
 
         return
 
-    message = update.message
-
     # -----------------------------------------------------
-    # الحصول على النص
+    # النص أو Caption
     # -----------------------------------------------------
 
     text = (
+
         message.text
-        or
+
+        if message.text
+
+        else
+
         message.caption
-        or
+
+        if message.caption
+
+        else
+
         ""
+
     )
 
     # -----------------------------------------------------
-    # إذا كانت الرسالة صورة بدون نص
+    # إذا لا يوجد نص
     # -----------------------------------------------------
 
     if not text.strip():
@@ -667,19 +670,17 @@ async def process_message(
 
             await message.reply_text(
 
-                "🖼️ تم استلام الصورة.\n\n"
+                "🖼️ وصلت الصورة، لكن لا يوجد معها نص بيانات.\n\n"
 
-                "لكن لم أجد بيانات نصية معها.\n\n"
-
-                "أرسل الصورة مع بيانات النزيل في Caption "
-                "أو أرسل البيانات كنص."
+                "قم بتحويل الرسالة التي تحتوي على بيانات "
+                "النزيل والصورة معاً."
 
             )
 
         else:
 
             await message.reply_text(
-                "❌ لم أجد بيانات نصية."
+                "❌ لم أجد بيانات في الرسالة."
             )
 
         return
@@ -688,110 +689,99 @@ async def process_message(
     # تقسيم النزلاء
     # -----------------------------------------------------
 
-    guests_text = split_guests(text)
+    guests = split_guests(
+        text
+    )
 
-    if not guests_text:
+    # -----------------------------------------------------
+    # الصورة
+    # -----------------------------------------------------
+
+    image = await get_photo(
+        update
+    )
+
+    # -----------------------------------------------------
+    # إذا كان هناك أكثر من نزيل
+    # -----------------------------------------------------
+
+    if len(guests) > 1:
 
         await message.reply_text(
-            "❌ لم أتمكن من استخراج بيانات النزيل."
+
+            "📋 تم العثور على "
+            f"{len(guests)} نزلاء.\n\n"
+            "حالياً سيتم إنشاء ملف مستقل لكل نزيل."
+
         )
 
-        return
-
     # -----------------------------------------------------
-    # استخراج البيانات
+    # إنشاء ملف لكل نزيل
     # -----------------------------------------------------
 
-    guests_data = []
+    for index, guest_text in enumerate(
+        guests
+    ):
 
-    for guest_text in guests_text:
+        guest = parse_guest(
+            guest_text
+        )
 
-        guests_data.append(
-            parse_guest(
-                guest_text
+        # إنشاء PDF
+        pdf_file = create_pdf(
+            guest,
+            image
+        )
+
+        # اسم النزيل
+        guest_name = guest.get(
+            "الاسم الثلاثي",
+            "تقرير_نزيل"
+        )
+
+        filename = safe_filename(
+            guest_name
+        )
+
+        # -------------------------------------------------
+        # إرسال PDF
+        # -------------------------------------------------
+
+        await message.reply_document(
+
+            document=pdf_file,
+
+            filename=filename,
+
+            caption=(
+
+                "📋 تقرير نزيل فندق\n\n"
+
+                f"👤 الاسم: {guest_name}\n"
+
+                f"🏨 الفندق: "
+                f"{guest.get('اسم الفندق', 'غير مذكور')}\n"
+
+                f"🚪 الغرفة: "
+                f"{guest.get('رقم الغرفة', 'غير مذكور')}\n"
+
+                f"🛏 الجناح: "
+                f"{guest.get('رقم الجناح', 'غير مذكور')}\n\n"
+
+                "✅ تم إنشاء الملف"
+
             )
-        )
-
-    # -----------------------------------------------------
-    # تحميل الصورة
-    # -----------------------------------------------------
-
-    images = []
-
-    if message.photo:
-
-        image = await download_photo(
-            update
-        )
-
-        if image:
-
-            # إذا كان هناك نزيل واحد
-            # نربط الصورة به
-
-            if len(guests_data) == 1:
-
-                images.append(
-                    image
-                )
-
-    # -----------------------------------------------------
-    # إشعار المستخدم
-    # -----------------------------------------------------
-
-    await message.reply_text(
-
-        f"⏳ جاري إنشاء التقرير...\n\n"
-        f"عدد النزلاء: {len(guests_data)}"
-
-    )
-
-    # -----------------------------------------------------
-    # إنشاء PDF
-    # -----------------------------------------------------
-
-    pdf_file = create_pdf(
-        guests_data,
-        images
-    )
-
-    # -----------------------------------------------------
-    # اسم الملف
-    # -----------------------------------------------------
-
-    filename = (
-        "hotel_guests_report.pdf"
-    )
-
-    # -----------------------------------------------------
-    # إرسال PDF
-    # -----------------------------------------------------
-
-    await message.reply_document(
-
-        document=pdf_file,
-
-        filename=filename,
-
-        caption=(
-
-            "📋 تقرير نزلاء الفنادق\n\n"
-
-            f"👤 عدد النزلاء: "
-            f"{len(guests_data)}\n"
-
-            f"🖼️ الصور: "
-            f"{'نعم' if images else 'لا'}\n\n"
-
-            "✅ تم إنشاء ملف PDF"
 
         )
 
-    )
+        # منع الإرسال السريع جداً
+        await asyncio.sleep(
+            0.5
+        )
 
 
 # =========================================================
-# إلغاء
+# CANCEL
 # =========================================================
 
 async def cancel(
@@ -805,7 +795,7 @@ async def cancel(
 
 
 # =========================================================
-# إنشاء البوت
+# إنشاء التطبيق
 # =========================================================
 
 app = ApplicationBuilder().token(
@@ -813,13 +803,16 @@ app = ApplicationBuilder().token(
 ).build()
 
 
+# =========================================================
+# الأوامر
+# =========================================================
+
 app.add_handler(
     CommandHandler(
         "start",
         start
     )
 )
-
 
 app.add_handler(
     CommandHandler(
@@ -829,9 +822,14 @@ app.add_handler(
 )
 
 
-# الرسائل النصية والصور
+# =========================================================
+# استقبال النص والصور
+# =========================================================
+
 app.add_handler(
+
     MessageHandler(
+
         (
             filters.TEXT
             |
@@ -839,21 +837,27 @@ app.add_handler(
         )
         &
         ~filters.COMMAND,
+
         process_message
+
     )
+
 )
 
 
 # =========================================================
-# تشغيل البوت
+# MAIN
 # =========================================================
 
 async def main():
 
-    # تشغيل منفذ Render
+    # تشغيل Render Web Server
     threading.Thread(
+
         target=run_web_server,
+
         daemon=True
+
     ).start()
 
     print(
@@ -867,18 +871,6 @@ async def main():
         )
 
         return
-
-    if not ARABIC_FONT:
-
-        print(
-            "WARNING: Arabic font was not found."
-        )
-
-    else:
-
-        print(
-            f"Arabic font found: {ARABIC_FONT}"
-        )
 
     await app.initialize()
 
@@ -904,9 +896,11 @@ async def main():
 
 
 # =========================================================
-# البداية
+# START PROGRAM
 # =========================================================
 
 if __name__ == "__main__":
 
-    asyncio.run(main())
+    asyncio.run(
+        main()
+    )
