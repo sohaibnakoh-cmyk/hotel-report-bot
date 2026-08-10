@@ -58,7 +58,7 @@ PAGE_WIDTH, PAGE_HEIGHT = A4
 
 
 # =========================================================
-# أسماء الفنادق
+# الفنادق
 # =========================================================
 
 HOTELS = [
@@ -110,15 +110,16 @@ LOGIN_PASSWORD = 2
 
 
 # =========================================================
-# حالات إضافة الفندق
+# حالات إنشاء حساب الفندق
 # =========================================================
 
-ADD_HOTEL_USERNAME = 10
-ADD_HOTEL_PASSWORD = 11
+ADD_HOTEL_SELECT = 10
+ADD_HOTEL_USERNAME = 11
+ADD_HOTEL_PASSWORD = 12
 
 
 # =========================================================
-# حالات نموذج النزيل
+# حالات النزيل
 # =========================================================
 
 GUEST_NAME = 20
@@ -150,9 +151,9 @@ def find_arabic_font():
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
     ]
 
-    for font_path in fonts:
-        if os.path.exists(font_path):
-            return font_path
+    for path in fonts:
+        if os.path.exists(path):
+            return path
 
     return None
 
@@ -160,44 +161,19 @@ def find_arabic_font():
 ARABIC_FONT_PATH = find_arabic_font()
 
 if ARABIC_FONT_PATH:
-
     try:
-
         pdfmetrics.registerFont(
             TTFont(
                 "ArabicFont",
                 ARABIC_FONT_PATH
             )
         )
-
         PDF_FONT = "ArabicFont"
-
-        print(
-            "Arabic font found:",
-            ARABIC_FONT_PATH
-        )
-
-    except Exception as e:
-
-        print(
-            "Arabic font error:",
-            e
-        )
-
+    except Exception:
         PDF_FONT = "Helvetica"
-
 else:
-
-    print(
-        "WARNING: Arabic font not found"
-    )
-
     PDF_FONT = "Helvetica"
 
-
-# =========================================================
-# معالجة العربية
-# =========================================================
 
 def arabic_text(text):
 
@@ -207,13 +183,10 @@ def arabic_text(text):
     text = str(text)
 
     try:
-
-        reshaped = arabic_reshaper.reshape(text)
-
-        return get_display(reshaped)
-
+        return get_display(
+            arabic_reshaper.reshape(text)
+        )
     except Exception:
-
         return text
 
 
@@ -223,28 +196,25 @@ def arabic_text(text):
 
 def get_db():
 
-    connection = sqlite3.connect(
+    db = sqlite3.connect(
         DATABASE_FILE,
         check_same_thread=False,
         timeout=30
     )
 
-    connection.row_factory = sqlite3.Row
+    db.row_factory = sqlite3.Row
 
-    return connection
+    return db
 
 
 def init_database():
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
-        """
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS guests (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             guest_name TEXT,
             mother_name TEXT,
             birth TEXT,
@@ -256,64 +226,44 @@ def init_database():
             checkin_date TEXT,
             duration TEXT,
             reason TEXT,
-
             record_date TEXT,
             record_time TEXT,
-
             telegram_user_id TEXT,
             telegram_username TEXT,
-
             hotel_account_id INTEGER
         )
-        """
-    )
+    """)
 
-    cursor.execute(
-        """
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS hotel_accounts (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             hotel_name TEXT NOT NULL,
-
             username TEXT UNIQUE NOT NULL,
-
             password_hash TEXT NOT NULL,
-
             salt TEXT NOT NULL,
-
             active INTEGER DEFAULT 1,
-
             telegram_user_id TEXT UNIQUE,
-
             created_at TEXT
         )
-        """
-    )
+    """)
 
-    cursor.execute(
-        """
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
-
             telegram_user_id TEXT PRIMARY KEY,
-
             hotel_account_id INTEGER,
-
             login_time TEXT,
-
             active INTEGER DEFAULT 1
         )
-        """
-    )
+    """)
 
-    connection.commit()
-    connection.close()
+    db.commit()
+    db.close()
 
-    print("Database initialized successfully")
+    print("Database initialized.")
 
 
 # =========================================================
-# تشفير كلمات المرور
+# كلمات المرور
 # =========================================================
 
 def hash_password(password, salt=None):
@@ -349,7 +299,7 @@ def verify_password(
 
 
 # =========================================================
-# إنشاء حساب فندق
+# إنشاء حساب الفندق
 # =========================================================
 
 def create_hotel_account(
@@ -362,41 +312,74 @@ def create_hotel_account(
     username = username.strip().lower()
 
     if hotel_name not in HOTELS:
+        return None, "الفندق غير موجود ضمن القائمة."
 
-        return None, "اسم الفندق غير موجود ضمن قائمة الفنادق المعتمدة."
-
-    if not username:
-
-        return None, "اسم المستخدم فارغ."
-
-    if len(username) < 3:
-
-        return None, "اسم المستخدم يجب ألا يقل عن 3 أحرف."
-
-    if not re.match(
-        r"^[a-zA-Z0-9_.-]{3,50}$",
+    if not re.fullmatch(
+        r"[a-zA-Z0-9_.-]{3,50}",
         username
     ):
-
         return None, (
             "اسم المستخدم غير صالح.\n"
-            "استخدم الأحرف الإنجليزية والأرقام فقط."
+            "استخدم أحرف إنجليزية وأرقام فقط."
         )
 
-    if not password or len(password) < 8:
+    if len(password) < 8:
+        return None, (
+            "كلمة المرور يجب أن تكون 8 أحرف على الأقل."
+        )
 
-        return None, "كلمة المرور يجب ألا تقل عن 8 أحرف."
+    db = get_db()
+    cur = db.cursor()
 
-    password_hash, salt = hash_password(
-        password
+    # -----------------------------------------------------
+    # التحقق من أن الفندق لا يملك حساباً سابقاً
+    # -----------------------------------------------------
+
+    cur.execute(
+        """
+        SELECT id
+        FROM hotel_accounts
+        WHERE hotel_name = ?
+        """,
+        (hotel_name,)
     )
 
-    connection = get_db()
-    cursor = connection.cursor()
+    existing_hotel = cur.fetchone()
+
+    if existing_hotel:
+        db.close()
+
+        return None, (
+            f"❌ الفندق {hotel_name} لديه حساب مسبقاً."
+        )
+
+    # -----------------------------------------------------
+    # التحقق من اسم المستخدم
+    # -----------------------------------------------------
+
+    cur.execute(
+        """
+        SELECT id
+        FROM hotel_accounts
+        WHERE username = ?
+        """,
+        (username,)
+    )
+
+    existing_username = cur.fetchone()
+
+    if existing_username:
+        db.close()
+
+        return None, (
+            "❌ اسم المستخدم مستخدم مسبقاً."
+        )
+
+    password_hash, salt = hash_password(password)
 
     try:
 
-        cursor.execute(
+        cur.execute(
             """
             INSERT INTO hotel_accounts
             (
@@ -421,19 +404,41 @@ def create_hotel_account(
             )
         )
 
-        connection.commit()
+        db.commit()
 
-        hotel_id = cursor.lastrowid
+        hotel_id = cur.lastrowid
 
-        connection.close()
+        db.close()
 
         return hotel_id, None
 
-    except sqlite3.IntegrityError:
+    except sqlite3.IntegrityError as e:
 
-        connection.close()
+        db.rollback()
+        db.close()
 
-        return None, "اسم المستخدم مستخدم مسبقاً."
+        print(
+            "Create hotel DB error:",
+            e
+        )
+
+        return None, (
+            "❌ تعذر إنشاء الحساب بسبب وجود بيانات مكررة."
+        )
+
+    except Exception as e:
+
+        db.rollback()
+        db.close()
+
+        print(
+            "Create hotel error:",
+            e
+        )
+
+        return None, (
+            "❌ حدث خطأ أثناء إنشاء الحساب."
+        )
 
 
 # =========================================================
@@ -447,10 +452,10 @@ def authenticate_hotel(
 
     username = username.strip().lower()
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
+    cur.execute(
         """
         SELECT *
         FROM hotel_accounts
@@ -459,9 +464,9 @@ def authenticate_hotel(
         (username,)
     )
 
-    account = cursor.fetchone()
+    account = cur.fetchone()
 
-    connection.close()
+    db.close()
 
     if not account:
         return None
@@ -480,45 +485,35 @@ def authenticate_hotel(
 
 
 # =========================================================
-# قائمة الفنادق
+# الفنادق
 # =========================================================
 
 def get_all_hotels():
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
+    cur.execute(
         """
-        SELECT
-            id,
-            hotel_name,
-            username,
-            active,
-            telegram_user_id,
-            created_at
+        SELECT *
         FROM hotel_accounts
         ORDER BY id ASC
         """
     )
 
-    rows = cursor.fetchall()
+    rows = cur.fetchall()
 
-    connection.close()
+    db.close()
 
     return rows
 
 
-# =========================================================
-# تعطيل الفندق
-# =========================================================
-
 def disable_hotel(hotel_id):
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
+    cur.execute(
         """
         UPDATE hotel_accounts
         SET active = 0
@@ -527,7 +522,7 @@ def disable_hotel(hotel_id):
         (hotel_id,)
     )
 
-    cursor.execute(
+    cur.execute(
         """
         DELETE FROM sessions
         WHERE hotel_account_id = ?
@@ -535,20 +530,16 @@ def disable_hotel(hotel_id):
         (hotel_id,)
     )
 
-    connection.commit()
-    connection.close()
+    db.commit()
+    db.close()
 
-
-# =========================================================
-# تفعيل الفندق
-# =========================================================
 
 def enable_hotel(hotel_id):
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
+    cur.execute(
         """
         UPDATE hotel_accounts
         SET active = 1
@@ -557,8 +548,8 @@ def enable_hotel(hotel_id):
         (hotel_id,)
     )
 
-    connection.commit()
-    connection.close()
+    db.commit()
+    db.close()
 
 
 # =========================================================
@@ -570,10 +561,10 @@ def create_session(
     hotel_account_id
 ):
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
+    cur.execute(
         """
         INSERT OR REPLACE INTO sessions
         (
@@ -593,7 +584,7 @@ def create_session(
         )
     )
 
-    cursor.execute(
+    cur.execute(
         """
         UPDATE hotel_accounts
         SET telegram_user_id = ?
@@ -605,16 +596,16 @@ def create_session(
         )
     )
 
-    connection.commit()
-    connection.close()
+    db.commit()
+    db.close()
 
 
 def logout_session(telegram_user_id):
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
+    cur.execute(
         """
         DELETE FROM sessions
         WHERE telegram_user_id = ?
@@ -622,31 +613,31 @@ def logout_session(telegram_user_id):
         (str(telegram_user_id),)
     )
 
-    connection.commit()
-    connection.close()
+    db.commit()
+    db.close()
 
 
 def get_logged_hotel(telegram_user_id):
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
+    cur.execute(
         """
         SELECT h.*
         FROM sessions s
         JOIN hotel_accounts h
-            ON h.id = s.hotel_account_id
+        ON h.id = s.hotel_account_id
         WHERE s.telegram_user_id = ?
-          AND s.active = 1
-          AND h.active = 1
+        AND s.active = 1
+        AND h.active = 1
         """,
         (str(telegram_user_id),)
     )
 
-    account = cursor.fetchone()
+    account = cur.fetchone()
 
-    connection.close()
+    db.close()
 
     return account
 
@@ -676,29 +667,24 @@ def is_admin(update):
 def save_guest(
     guest,
     update,
-    hotel_account_id=None
+    hotel_account_id
 ):
 
     now = datetime.now()
 
-    user_id = ""
-    username = ""
+    user_id = str(
+        update.effective_user.id
+    )
 
-    if update.effective_user:
+    username = (
+        update.effective_user.username
+        or ""
+    )
 
-        user_id = str(
-            update.effective_user.id
-        )
+    db = get_db()
+    cur = db.cursor()
 
-        username = (
-            update.effective_user.username
-            or ""
-        )
-
-    connection = get_db()
-    cursor = connection.cursor()
-
-    cursor.execute(
+    cur.execute(
         """
         INSERT INTO guests
         (
@@ -722,50 +708,17 @@ def save_guest(
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            guest.get(
-                "الاسم الثلاثي",
-                "غير مذكور"
-            ),
-            guest.get(
-                "اسم الأم",
-                "غير مذكور"
-            ),
-            guest.get(
-                "مكان وتاريخ الولادة",
-                "غير مذكور"
-            ),
-            guest.get(
-                "السكن الأصلي",
-                "غير مذكور"
-            ),
-            guest.get(
-                "المحافظة",
-                "غير مذكور"
-            ),
-            guest.get(
-                "اسم الفندق",
-                "غير مذكور"
-            ),
-            guest.get(
-                "رقم الجناح",
-                "غير مذكور"
-            ),
-            guest.get(
-                "رقم الغرفة",
-                "غير مذكور"
-            ),
-            guest.get(
-                "تاريخ النزول",
-                "غير مذكور"
-            ),
-            guest.get(
-                "مدة الإقامة",
-                "غير مذكور"
-            ),
-            guest.get(
-                "سبب الإقامة",
-                "غير مذكور"
-            ),
+            guest.get("الاسم الثلاثي", ""),
+            guest.get("اسم الأم", ""),
+            guest.get("مكان وتاريخ الولادة", ""),
+            guest.get("السكن الأصلي", ""),
+            guest.get("المحافظة", ""),
+            guest.get("اسم الفندق", ""),
+            guest.get("رقم الجناح", ""),
+            guest.get("رقم الغرفة", ""),
+            guest.get("تاريخ النزول", ""),
+            guest.get("مدة الإقامة", ""),
+            guest.get("سبب الإقامة", ""),
             now.strftime("%Y-%m-%d"),
             now.strftime("%H:%M:%S"),
             user_id,
@@ -774,11 +727,11 @@ def save_guest(
         )
     )
 
-    connection.commit()
+    db.commit()
 
-    guest_id = cursor.lastrowid
+    guest_id = cur.lastrowid
 
-    connection.close()
+    db.close()
 
     return guest_id
 
@@ -789,10 +742,10 @@ def save_guest(
 
 def get_guests_by_date(target_date):
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
+    cur.execute(
         """
         SELECT *
         FROM guests
@@ -802,687 +755,157 @@ def get_guests_by_date(target_date):
         (target_date,)
     )
 
-    rows = cursor.fetchall()
+    rows = cur.fetchall()
 
-    connection.close()
+    db.close()
 
     return rows
 
 
-def get_guests_by_month(year_month):
+def get_guests_by_month(month):
 
-    connection = get_db()
-    cursor = connection.cursor()
+    db = get_db()
+    cur = db.cursor()
 
-    cursor.execute(
+    cur.execute(
         """
         SELECT *
         FROM guests
         WHERE substr(record_date, 1, 7) = ?
         ORDER BY id ASC
         """,
-        (year_month,)
+        (month,)
     )
 
-    rows = cursor.fetchall()
+    rows = cur.fetchall()
 
-    connection.close()
+    db.close()
 
     return rows
 
 
 # =========================================================
-# اسم الملف
+# القوائم
 # =========================================================
 
-def safe_filename(name):
+def hotel_keyboard(prefix):
 
-    if not name:
-        name = "تقرير_نزيل"
+    keyboard = []
+    row = []
 
-    name = re.sub(
-        r'[\\/:*?"<>|]',
-        "",
-        name
-    )
+    for index, hotel in enumerate(HOTELS):
 
-    name = re.sub(
-        r"\s+",
-        "_",
-        name.strip()
-    )
+        row.append(
+            InlineKeyboardButton(
+                f"🏨 {hotel}",
+                callback_data=f"{prefix}:{index}"
+            )
+        )
 
-    if not name:
-        name = "تقرير_نزيل"
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
 
-    return name + ".pdf"
+    if row:
+        keyboard.append(row)
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+def governorate_keyboard():
+
+    keyboard = []
+    row = []
+
+    for index, item in enumerate(GOVERNORATES):
+
+        row.append(
+            InlineKeyboardButton(
+                f"📍 {item}",
+                callback_data=f"governorate:{index}"
+            )
+        )
+
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    return InlineKeyboardMarkup(keyboard)
 
 
 # =========================================================
-# PDF
+# أوامر البوت
 # =========================================================
 
-def draw_pdf_title(
-    pdf,
-    hotel_name,
-    subtitle="تقرير بيانات نزيل"
+async def set_admin_commands(
+    application,
+    chat_id
 ):
 
-    pdf.setFillColor(
-        colors.HexColor("#17365D")
-    )
-
-    pdf.roundRect(
-        35,
-        PAGE_HEIGHT - 105,
-        PAGE_WIDTH - 70,
-        70,
-        8,
-        fill=1,
-        stroke=0
-    )
-
-    pdf.setFillColor(
-        colors.white
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        18
-    )
-
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 63,
-        arabic_text(hotel_name)
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        11
-    )
-
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 84,
-        arabic_text(subtitle)
-    )
-
-    pdf.setFillColor(
-        colors.black
-    )
-
-
-def draw_pdf_section_title(
-    pdf,
-    y,
-    title
-):
-
-    pdf.setFillColor(
-        colors.HexColor("#D9EAF7")
-    )
-
-    pdf.roundRect(
-        45,
-        y - 25,
-        PAGE_WIDTH - 90,
-        30,
-        5,
-        fill=1,
-        stroke=0
-    )
-
-    pdf.setFillColor(
-        colors.HexColor("#17365D")
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        12
-    )
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 60,
-        y - 15,
-        arabic_text(title)
-    )
-
-    pdf.setFillColor(
-        colors.black
-    )
-
-    return y - 42
-
-
-def draw_pdf_field(
-    pdf,
-    y,
-    label,
-    value
-):
-
-    value = str(
-        value if value is not None else ""
-    )
-
-    pdf.setFillColor(
-        colors.HexColor("#F6F8FA")
-    )
-
-    pdf.roundRect(
-        45,
-        y - 27,
-        PAGE_WIDTH - 90,
-        31,
-        4,
-        fill=1,
-        stroke=0
-    )
-
-    pdf.setFillColor(
-        colors.HexColor("#333333")
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        9
-    )
-
-    text = f"{label}: {value}"
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 60,
-        y - 17,
-        arabic_text(text)
-    )
-
-    return y - 38
-
-
-def draw_id_image(
-    pdf,
-    image_data,
-    title,
-    y
-):
-
-    try:
-
-        image_data.seek(0)
-
-        image = ImageReader(
-            image_data
-        )
-
-        max_width = PAGE_WIDTH - 100
-        max_height = 280
-
-        iw, ih = image.getSize()
-
-        scale = min(
-            max_width / iw,
-            max_height / ih
-        )
-
-        width = iw * scale
-        height = ih * scale
-
-        pdf.setFillColor(
-            colors.HexColor("#17365D")
-        )
-
-        pdf.setFont(
-            PDF_FONT,
-            12
-        )
-
-        pdf.drawCentredString(
-            PAGE_WIDTH / 2,
-            y,
-            arabic_text(title)
-        )
-
-        y -= 20
-
-        pdf.setStrokeColor(
-            colors.HexColor("#B7C9D6")
-        )
-
-        pdf.rect(
-            (PAGE_WIDTH - width) / 2 - 5,
-            y - height - 5,
-            width + 10,
-            height + 10,
-            fill=0,
-            stroke=1
-        )
-
-        pdf.drawImage(
-            image,
-            (PAGE_WIDTH - width) / 2,
-            y - height,
-            width=width,
-            height=height,
-            preserveAspectRatio=True,
-            anchor="sw",
-            mask="auto"
-        )
-
-        return y - height - 35
-
-    except Exception as e:
-
-        print(
-            "PDF image error:",
-            e
-        )
-
-        return y - 30
-
-
-def create_guest_pdf(
-    guest,
-    images=None
-):
-
-    buffer = BytesIO()
-
-    pdf = canvas.Canvas(
-        buffer,
-        pagesize=A4
-    )
-
-    hotel_name = guest.get(
-        "اسم الفندق",
-        "الفندق"
-    )
-
-    draw_pdf_title(
-        pdf,
-        hotel_name,
-        "تقرير بيانات نزيل"
-    )
-
-    y = PAGE_HEIGHT - 130
-
-    pdf.setFont(
-        PDF_FONT,
-        8
-    )
-
-    pdf.setFillColor(
-        colors.grey
-    )
-
-    now = datetime.now().strftime(
-        "%Y-%m-%d %H:%M"
-    )
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 50,
-        y,
-        arabic_text(
-            f"تاريخ إنشاء التقرير: {now}"
-        )
-    )
-
-    y -= 35
-
-    y = draw_pdf_section_title(
-        pdf,
-        y,
-        "بيانات النزيل"
-    )
-
-    fields = [
-        (
-            "الاسم الثلاثي",
-            guest.get(
-                "الاسم الثلاثي",
-                "غير مذكور"
-            )
-        ),
-        (
-            "اسم الأم",
-            guest.get(
-                "اسم الأم",
-                "غير مذكور"
-            )
-        ),
-        (
-            "مكان وتاريخ الولادة",
-            guest.get(
-                "مكان وتاريخ الولادة",
-                "غير مذكور"
-            )
-        ),
-        (
-            "السكن الأصلي",
-            guest.get(
-                "السكن الأصلي",
-                "غير مذكور"
-            )
-        ),
-        (
-            "المحافظة",
-            guest.get(
-                "المحافظة",
-                "غير مذكور"
-            )
-        ),
-        (
-            "اسم الفندق",
-            hotel_name
-        ),
-        (
-            "رقم الجناح",
-            guest.get(
-                "رقم الجناح",
-                "غير مذكور"
-            )
-        ),
-        (
-            "رقم الغرفة",
-            guest.get(
-                "رقم الغرفة",
-                "غير مذكور"
-            )
-        ),
-        (
-            "تاريخ النزول",
-            guest.get(
-                "تاريخ النزول",
-                "غير مذكور"
-            )
-        ),
-        (
-            "مدة الإقامة",
-            guest.get(
-                "مدة الإقامة",
-                "غير مذكور"
-            )
-        ),
-        (
-            "سبب الإقامة",
-            guest.get(
-                "سبب الإقامة",
-                "غير مذكور"
-            )
-        ),
+    commands = [
+        BotCommand("start", "🏠 الرئيسية"),
+        BotCommand("add_hotel", "🏨 إضافة فندق"),
+        BotCommand("hotels", "📋 قائمة الفنادق"),
+        BotCommand("delete_hotel", "🗑️ تعطيل فندق"),
+        BotCommand("daily", "📊 التقرير اليومي"),
+        BotCommand("yesterday", "📅 تقرير أمس"),
+        BotCommand("monthly", "📈 التقرير الشهري"),
+        BotCommand("logout", "🚪 تسجيل الخروج"),
     ]
 
-    for label, value in fields:
-
-        if y < 80:
-
-            pdf.showPage()
-
-            draw_pdf_title(
-                pdf,
-                hotel_name,
-                "تقرير بيانات نزيل"
-            )
-
-            y = PAGE_HEIGHT - 130
-
-        y = draw_pdf_field(
-            pdf,
-            y,
-            label,
-            value
+    try:
+        await application.bot.set_my_commands(
+            commands,
+            scope=BotCommandScopeChat(chat_id)
         )
-
-    if images and len(images) >= 2:
-
-        pdf.showPage()
-
-        draw_pdf_title(
-            pdf,
-            hotel_name,
-            "صور البطاقة الشخصية"
-        )
-
-        y = PAGE_HEIGHT - 135
-
-        y = draw_pdf_section_title(
-            pdf,
-            y,
-            "البطاقة الشخصية - الوجه الأمامي"
-        )
-
-        y -= 15
-
-        draw_id_image(
-            pdf,
-            images[0],
-            "الوجه الأمامي للبطاقة الشخصية",
-            y
-        )
-
-        pdf.showPage()
-
-        draw_pdf_title(
-            pdf,
-            hotel_name,
-            "صور البطاقة الشخصية"
-        )
-
-        y = PAGE_HEIGHT - 135
-
-        y = draw_pdf_section_title(
-            pdf,
-            y,
-            "البطاقة الشخصية - الوجه الخلفي"
-        )
-
-        y -= 15
-
-        draw_id_image(
-            pdf,
-            images[1],
-            "الوجه الخلفي للبطاقة الشخصية",
-            y
-        )
-
-    pdf.setFont(
-        PDF_FONT,
-        7
-    )
-
-    pdf.setFillColor(
-        colors.grey
-    )
-
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        25,
-        arabic_text(
-            f"الفندق: {hotel_name}"
-        )
-    )
-
-    pdf.save()
-
-    buffer.seek(0)
-
-    return buffer
+    except Exception as e:
+        print("Admin commands:", e)
 
 
-# =========================================================
-# PDF التقارير اليومية
-# =========================================================
-
-def create_daily_pdf(
-    rows,
-    target_date,
-    title="تقرير عمل قسم معلومات الفنادق"
+async def set_hotel_commands(
+    application,
+    chat_id
 ):
 
-    buffer = BytesIO()
+    commands = [
+        BotCommand("start", "🏠 الرئيسية"),
+        BotCommand("login", "🔐 تسجيل الدخول"),
+    ]
 
-    pdf = canvas.Canvas(
-        buffer,
-        pagesize=A4
-    )
-
-    y = PAGE_HEIGHT - 120
-
-    pdf.setFillColor(
-        colors.HexColor("#17365D")
-    )
-
-    pdf.roundRect(
-        35,
-        PAGE_HEIGHT - 105,
-        PAGE_WIDTH - 70,
-        70,
-        8,
-        fill=1,
-        stroke=0
-    )
-
-    pdf.setFillColor(
-        colors.white
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        16
-    )
-
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 63,
-        arabic_text(title)
-    )
-
-    pdf.setFillColor(
-        colors.black
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        11
-    )
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 50,
-        y,
-        arabic_text(
-            f"التاريخ: {target_date}"
+    try:
+        await application.bot.set_my_commands(
+            commands,
+            scope=BotCommandScopeChat(chat_id)
         )
-    )
+    except Exception as e:
+        print("Hotel commands:", e)
 
-    y -= 40
 
-    total = len(rows)
+async def set_logged_hotel_commands(
+    application,
+    chat_id
+):
 
-    governorates = Counter(
-        row["governorate"]
-        for row in rows
-    )
+    commands = [
+        BotCommand("start", "🏠 الرئيسية"),
+        BotCommand("new_guest", "👤 تسجيل نزيل"),
+        BotCommand("logout", "🚪 تسجيل الخروج"),
+    ]
 
-    hotels = Counter(
-        row["hotel"]
-        for row in rows
-    )
-
-    reasons = Counter(
-        row["reason"]
-        for row in rows
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        14
-    )
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 50,
-        y,
-        arabic_text(
-            f"إجمالي النزلاء: {total}"
+    try:
+        await application.bot.set_my_commands(
+            commands,
+            scope=BotCommandScopeChat(chat_id)
         )
-    )
-
-    y -= 40
-
-    def draw_counter_section(
-        section_title,
-        counter
-    ):
-
-        nonlocal y
-
-        if y < 120:
-
-            pdf.showPage()
-
-            y = PAGE_HEIGHT - 120
-
-        pdf.setFont(
-            PDF_FONT,
-            13
-        )
-
-        pdf.drawRightString(
-            PAGE_WIDTH - 50,
-            y,
-            arabic_text(section_title)
-        )
-
-        y -= 30
-
-        pdf.setFont(
-            PDF_FONT,
-            10
-        )
-
-        for name, count in counter.most_common():
-
-            if y < 70:
-
-                pdf.showPage()
-
-                y = PAGE_HEIGHT - 120
-
-            line = f"• {name}: {count}"
-
-            pdf.drawRightString(
-                PAGE_WIDTH - 70,
-                y,
-                arabic_text(line)
-            )
-
-            y -= 22
-
-        y -= 12
-
-    draw_counter_section(
-        "أولاً: التوزيع حسب المحافظة",
-        governorates
-    )
-
-    draw_counter_section(
-        "ثانياً: توزيع النزلاء على الفنادق",
-        hotels
-    )
-
-    draw_counter_section(
-        "ثالثاً: أسباب الإقامة",
-        reasons
-    )
-
-    pdf.save()
-
-    buffer.seek(0)
-
-    return buffer
+    except Exception as e:
+        print("Logged commands:", e)
 
 
 # =========================================================
-# صورة الترحيب
+# الترحيب
 # =========================================================
 
 async def send_welcome_image(update):
@@ -1505,169 +928,13 @@ async def send_welcome_image(update):
             )
 
     except Exception as e:
+        print("Image:", e)
 
-        print(
-            "Welcome image error:",
-            e
-        )
-
-
-# =========================================================
-# أوامر المدير
-# =========================================================
-
-async def set_admin_commands(
-    application,
-    chat_id
-):
-
-    commands = [
-
-        BotCommand(
-            "start",
-            "🏠 الرئيسية"
-        ),
-
-        BotCommand(
-            "add_hotel",
-            "🏨 إضافة فندق"
-        ),
-
-        BotCommand(
-            "hotels",
-            "📋 قائمة الفنادق"
-        ),
-
-        BotCommand(
-            "delete_hotel",
-            "🗑️ حذف فندق"
-        ),
-
-        BotCommand(
-            "daily",
-            "📊 التقرير اليومي"
-        ),
-
-        BotCommand(
-            "yesterday",
-            "📅 تقرير أمس"
-        ),
-
-        BotCommand(
-            "monthly",
-            "📈 التقرير الشهري"
-        ),
-
-        BotCommand(
-            "logout",
-            "🚪 تسجيل الخروج"
-        ),
-    ]
-
-    try:
-
-        await application.bot.set_my_commands(
-            commands,
-            scope=BotCommandScopeChat(chat_id)
-        )
-
-    except Exception as e:
-
-        print(
-            "Admin commands error:",
-            e
-        )
-
-
-# =========================================================
-# أوامر الفندق قبل الدخول
-# =========================================================
-
-async def set_hotel_commands(
-    application,
-    chat_id
-):
-
-    commands = [
-
-        BotCommand(
-            "start",
-            "🏠 بدء"
-        ),
-
-        BotCommand(
-            "login",
-            "🔐 تسجيل الدخول"
-        ),
-    ]
-
-    try:
-
-        await application.bot.set_my_commands(
-            commands,
-            scope=BotCommandScopeChat(chat_id)
-        )
-
-    except Exception as e:
-
-        print(
-            "Hotel commands error:",
-            e
-        )
-
-
-# =========================================================
-# أوامر الفندق بعد الدخول
-# =========================================================
-
-async def set_logged_hotel_commands(
-    application,
-    chat_id
-):
-
-    commands = [
-
-        BotCommand(
-            "start",
-            "🏠 الرئيسية"
-        ),
-
-        BotCommand(
-            "new_guest",
-            "👤 تسجيل نزيل"
-        ),
-
-        BotCommand(
-            "logout",
-            "🚪 تسجيل الخروج"
-        ),
-    ]
-
-    try:
-
-        await application.bot.set_my_commands(
-            commands,
-            scope=BotCommandScopeChat(chat_id)
-        )
-
-    except Exception as e:
-
-        print(
-            "Logged hotel commands error:",
-            e
-        )
-
-
-# =========================================================
-# الصفحة الرئيسية
-# =========================================================
 
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
-
-    user_id = update.effective_user.id
 
     if is_admin(update):
 
@@ -1679,18 +946,19 @@ async def start(
         await send_welcome_image(update)
 
         await update.message.reply_text(
-
             "بسم الله الرحمن الرحيم 🌿\n\n"
             "السلام عليكم ورحمة الله وبركاته\n\n"
-            "🏨 أهلاً وسهلاً بك في نظام معلومات الفنادق.\n\n"
-            "👨‍💼 تم التعرف على حسابك كحساب مدير.\n\n"
-            "يمكنك الآن إدارة حسابات الفنادق "
-            "ومتابعة البيانات والتقارير من القائمة."
+            "👨‍💼 أهلاً بك في حساب الإدارة.\n\n"
+            "🏨 يمكنك إدارة حسابات الفنادق "
+            "ومتابعة التقارير."
         )
 
         return
 
-    hotel = get_logged_hotel(user_id)
+    hotel = await asyncio.to_thread(
+        get_logged_hotel,
+        update.effective_user.id
+    )
 
     if hotel:
 
@@ -1699,17 +967,11 @@ async def start(
             update.effective_chat.id
         )
 
-        await send_welcome_image(update)
-
         await update.message.reply_text(
-
-            "بسم الله الرحمن الرحيم 🌿\n\n"
-            "السلام عليكم ورحمة الله وبركاته\n\n"
-            f"🏨 أهلاً وسهلاً بكم\n"
-            f"فندق: {hotel['hotel_name']}\n\n"
-            "✅ تم تسجيل الدخول بنجاح.\n\n"
-            "يمكنكم الآن تسجيل بيانات النزلاء من خلال:\n"
-            "👤 /new_guest"
+            "🏨 أهلاً بكم\n\n"
+            f"الفندق: {hotel['hotel_name']}\n\n"
+            "✅ تم تسجيل الدخول.\n\n"
+            "/new_guest"
         )
 
         return
@@ -1722,12 +984,8 @@ async def start(
     await send_welcome_image(update)
 
     await update.message.reply_text(
-
-        "بسم الله الرحمن الرحيم 🌿\n\n"
-        "السلام عليكم ورحمة الله وبركاته\n\n"
-        "🏨 أهلاً وسهلاً ومرحباً بكم\n"
-        "في نظام معلومات الفنادق.\n\n"
-        "🔐 للبدء يرجى استخدام:\n"
+        "🏨 أهلاً وسهلاً بكم في نظام معلومات الفنادق.\n\n"
+        "🔐 للبدء:\n"
         "/login"
     )
 
@@ -1744,27 +1002,33 @@ async def login_start(
     if is_admin(update):
 
         await update.message.reply_text(
-            "👨‍💼 أنت المدير ولا تحتاج لتسجيل الدخول."
+            "👨‍💼 أنت المدير."
         )
 
         return ConversationHandler.END
 
-    hotel = get_logged_hotel(
+    hotel = await asyncio.to_thread(
+        get_logged_hotel,
         update.effective_user.id
     )
 
     if hotel:
 
         await update.message.reply_text(
-            "✅ أنت مسجل الدخول بالفعل.\n\n"
-            f"🏨 الفندق: {hotel['hotel_name']}"
+            f"✅ أنت مسجل الدخول بالفعل.\n"
+            f"🏨 {hotel['hotel_name']}"
         )
 
         return ConversationHandler.END
 
+    context.user_data.pop(
+        "login_username",
+        None
+    )
+
     await update.message.reply_text(
         "🔐 تسجيل دخول الفندق\n\n"
-        "أرسل اسم المستخدم:"
+        "👤 أرسل اسم المستخدم:"
     )
 
     return LOGIN_USERNAME
@@ -1802,7 +1066,8 @@ async def login_password(
     if not username:
 
         await update.message.reply_text(
-            "❌ حدث خطأ.\nاستخدم /login من جديد."
+            "❌ انتهت العملية.\n"
+            "استخدم /login من جديد."
         )
 
         return ConversationHandler.END
@@ -1826,29 +1091,23 @@ async def login_password(
 
         return ConversationHandler.END
 
-    old_telegram_id = account[
-        "telegram_user_id"
-    ]
-
-    current_telegram_id = str(
+    current_id = str(
         update.effective_user.id
     )
 
-    if (
-        old_telegram_id
-        and old_telegram_id != current_telegram_id
-    ):
+    old_id = account["telegram_user_id"]
+
+    if old_id and old_id != current_id:
 
         await update.message.reply_text(
-            "⚠️ هذا الحساب مرتبط بحساب Telegram آخر.\n\n"
-            "يرجى التواصل مع الإدارة."
+            "⚠️ هذا الحساب مرتبط بحساب Telegram آخر."
         )
 
         return ConversationHandler.END
 
     await asyncio.to_thread(
         create_session,
-        current_telegram_id,
+        current_id,
         account["id"]
     )
 
@@ -1863,10 +1122,8 @@ async def login_password(
     )
 
     await update.message.reply_text(
-
         "✅ تم تسجيل الدخول بنجاح.\n\n"
         f"🏨 الفندق: {account['hotel_name']}\n\n"
-        "👤 لتسجيل نزيل جديد:\n"
         "/new_guest"
     )
 
@@ -1885,7 +1142,7 @@ async def logout(
     if is_admin(update):
 
         await update.message.reply_text(
-            "👨‍💼 حساب المدير لا يحتاج إلى تسجيل خروج."
+            "👨‍💼 حساب المدير."
         )
 
         return
@@ -1903,77 +1160,7 @@ async def logout(
     )
 
     await update.message.reply_text(
-        "🚪 تم تسجيل الخروج بنجاح."
-    )
-
-
-# =========================================================
-# لوحة الفنادق
-# =========================================================
-
-def hotel_keyboard(
-    prefix="hotel_select"
-):
-
-    keyboard = []
-
-    row = []
-
-    for index, hotel in enumerate(HOTELS):
-
-        row.append(
-            InlineKeyboardButton(
-                f"🏨 {hotel}",
-                callback_data=f"{prefix}:{index}"
-            )
-        )
-
-        if len(row) == 2:
-
-            keyboard.append(row)
-
-            row = []
-
-    if row:
-        keyboard.append(row)
-
-    return InlineKeyboardMarkup(
-        keyboard
-    )
-
-
-# =========================================================
-# لوحة المحافظات
-# =========================================================
-
-def governorate_keyboard():
-
-    keyboard = []
-
-    row = []
-
-    for index, governorate in enumerate(
-        GOVERNORATES
-    ):
-
-        row.append(
-            InlineKeyboardButton(
-                f"📍 {governorate}",
-                callback_data=f"governorate_select:{index}"
-            )
-        )
-
-        if len(row) == 2:
-
-            keyboard.append(row)
-
-            row = []
-
-    if row:
-        keyboard.append(row)
-
-    return InlineKeyboardMarkup(
-        keyboard
+        "🚪 تم تسجيل الخروج."
     )
 
 
@@ -1994,7 +1181,6 @@ async def add_hotel_start(
 
         return ConversationHandler.END
 
-    # تنظيف بيانات العملية السابقة
     context.user_data.pop(
         "new_hotel_name",
         None
@@ -2011,23 +1197,21 @@ async def add_hotel_start(
     )
 
     await update.message.reply_text(
-
-        "🏨 إضافة حساب فندق جديد\n\n"
-        "اختر اسم الفندق من القائمة:",
-
+        "🏨 إنشاء حساب فندق جديد\n\n"
+        "اختر الفندق:",
         reply_markup=hotel_keyboard(
-            "admin_hotel_select"
+            "create_hotel"
         )
     )
 
-    return ADD_HOTEL_USERNAME
+    return ADD_HOTEL_SELECT
 
 
 # =========================================================
-# اختيار الفندق أثناء إنشاء الحساب
+# إضافة حساب الفندق - اختيار الفندق
 # =========================================================
 
-async def add_hotel_select_button(
+async def add_hotel_select(
     update,
     context
 ):
@@ -2054,46 +1238,71 @@ async def add_hotel_select_button(
 
     except Exception:
 
-        await query.answer(
-            "اختيار غير صالح",
-            show_alert=True
+        await query.edit_message_text(
+            "❌ اختيار الفندق غير صالح."
         )
 
-        return ADD_HOTEL_USERNAME
+        return ADD_HOTEL_SELECT
+
+    # -----------------------------------------------------
+    # فحص إذا كان الفندق لديه حساب
+    # -----------------------------------------------------
+
+    db = get_db()
+    cur = db.cursor()
+
+    cur.execute(
+        """
+        SELECT id, username, active
+        FROM hotel_accounts
+        WHERE hotel_name = ?
+        """,
+        (hotel_name,)
+    )
+
+    existing = cur.fetchone()
+
+    db.close()
+
+    if existing:
+
+        if existing["active"]:
+
+            await query.edit_message_text(
+                "⚠️ هذا الفندق لديه حساب مسبقاً.\n\n"
+                f"🏨 الفندق: {hotel_name}\n"
+                f"👤 اسم المستخدم: {existing['username']}\n\n"
+                "لا يمكن إنشاء حساب ثانٍ لنفس الفندق."
+            )
+
+        else:
+
+            await query.edit_message_text(
+                "⚠️ هذا الفندق لديه حساب موقوف مسبقاً.\n\n"
+                f"🏨 {hotel_name}\n"
+                f"👤 المستخدم: {existing['username']}\n\n"
+                "يمكنك تفعيله من /hotels."
+            )
+
+        return ConversationHandler.END
 
     context.user_data[
         "new_hotel_name"
     ] = hotel_name
 
-    context.user_data.pop(
-        "new_hotel_username",
-        None
-    )
-
-    context.user_data.pop(
-        "new_hotel_password",
-        None
-    )
-
     await query.edit_message_text(
-
-        f"🏨 الفندق المختار:\n"
-        f"{hotel_name}\n\n"
-
-        "👤 الآن أرسل اسم المستخدم للفندق.\n\n"
-
+        "✅ تم اختيار الفندق\n\n"
+        f"🏨 الفندق: {hotel_name}\n\n"
+        "👤 الآن أرسل اسم المستخدم.\n\n"
         "مثال:\n"
-        "cordoba\n\n"
-
-        "⚠️ استخدم الأحرف الإنجليزية "
-        "والأرقام فقط."
+        "hotel_qurtuba"
     )
 
     return ADD_HOTEL_USERNAME
 
 
 # =========================================================
-# اسم مستخدم الفندق
+# إضافة حساب الفندق - اسم المستخدم
 # =========================================================
 
 async def add_hotel_username(
@@ -2103,49 +1312,29 @@ async def add_hotel_username(
 
     if not is_admin(update):
 
-        await update.message.reply_text(
-            "⛔ غير مصرح لك."
-        )
-
-        return ConversationHandler.END
-
-    hotel_name = context.user_data.get(
-        "new_hotel_name"
-    )
-
-    if not hotel_name:
-
-        await update.message.reply_text(
-            "❌ لم يتم اختيار الفندق.\n\n"
-            "ابدأ العملية من جديد باستخدام:\n"
-            "/add_hotel"
-        )
-
         return ConversationHandler.END
 
     username = update.message.text.strip().lower()
 
-    if not re.match(
-        r"^[a-zA-Z0-9_.-]{3,50}$",
+    if not re.fullmatch(
+        r"[a-zA-Z0-9_.-]{3,50}",
         username
     ):
 
         await update.message.reply_text(
-
             "❌ اسم المستخدم غير صالح.\n\n"
-            "استخدم الأحرف الإنجليزية "
-            "والأرقام والنقطة والشرطة فقط.\n\n"
-            "مثال:\n"
-            "cordoba"
+            "استخدم الأحرف الإنجليزية والأرقام فقط.\n"
+            "الطول من 3 إلى 50."
         )
 
         return ADD_HOTEL_USERNAME
 
-    # التأكد من عدم وجود الحساب مسبقاً
-    connection = get_db()
-    cursor = connection.cursor()
+    # فحص اسم المستخدم فوراً
 
-    cursor.execute(
+    db = get_db()
+    cur = db.cursor()
+
+    cur.execute(
         """
         SELECT id
         FROM hotel_accounts
@@ -2154,14 +1343,13 @@ async def add_hotel_username(
         (username,)
     )
 
-    existing = cursor.fetchone()
+    exists = cur.fetchone()
 
-    connection.close()
+    db.close()
 
-    if existing:
+    if exists:
 
         await update.message.reply_text(
-
             "❌ اسم المستخدم مستخدم مسبقاً.\n\n"
             "أرسل اسم مستخدم آخر:"
         )
@@ -2173,21 +1361,16 @@ async def add_hotel_username(
     ] = username
 
     await update.message.reply_text(
-
-        f"🏨 الفندق: {hotel_name}\n"
-        f"👤 اسم المستخدم: {username}\n\n"
-
+        "✅ تم قبول اسم المستخدم.\n\n"
         "🔑 الآن أرسل كلمة المرور.\n\n"
-
-        "⚠️ يجب أن تكون كلمة المرور "
-        "8 أحرف على الأقل."
+        "يجب أن تكون 8 أحرف على الأقل."
     )
 
     return ADD_HOTEL_PASSWORD
 
 
 # =========================================================
-# كلمة مرور الفندق وإنشاء الحساب
+# إضافة حساب الفندق - كلمة المرور
 # =========================================================
 
 async def add_hotel_password(
@@ -2197,24 +1380,9 @@ async def add_hotel_password(
 
     if not is_admin(update):
 
-        await update.message.reply_text(
-            "⛔ غير مصرح لك."
-        )
-
         return ConversationHandler.END
 
     password = update.message.text.strip()
-
-    if len(password) < 8:
-
-        await update.message.reply_text(
-
-            "❌ كلمة المرور قصيرة.\n\n"
-            "يجب ألا تقل عن 8 أحرف.\n"
-            "أرسل كلمة مرور جديدة:"
-        )
-
-        return ADD_HOTEL_PASSWORD
 
     hotel_name = context.user_data.get(
         "new_hotel_name"
@@ -2227,31 +1395,33 @@ async def add_hotel_password(
     if not hotel_name or not username:
 
         await update.message.reply_text(
-
-            "❌ بيانات إنشاء الحساب غير مكتملة.\n\n"
-            "يرجى البدء من جديد:\n"
-            "/add_hotel"
-        )
-
-        context.user_data.pop(
-            "new_hotel_name",
-            None
-        )
-
-        context.user_data.pop(
-            "new_hotel_username",
-            None
+            "❌ انتهت بيانات العملية.\n\n"
+            "استخدم /add_hotel من جديد."
         )
 
         return ConversationHandler.END
 
-    # =====================================================
-    # إنشاء الحساب فعلياً
-    # =====================================================
+    if len(password) < 8:
 
-    await update.message.reply_text(
+        await update.message.reply_text(
+            "❌ كلمة المرور قصيرة.\n\n"
+            "يجب أن تكون 8 أحرف على الأقل.\n"
+            "أرسل كلمة مرور جديدة:"
+        )
+
+        return ADD_HOTEL_PASSWORD
+
+    # -----------------------------------------------------
+    # رسالة فورية للمدير
+    # -----------------------------------------------------
+
+    progress_message = await update.message.reply_text(
         "⏳ جارٍ إنشاء حساب الفندق..."
     )
+
+    # -----------------------------------------------------
+    # إنشاء الحساب خارج Event Loop
+    # -----------------------------------------------------
 
     hotel_id, error = await asyncio.to_thread(
         create_hotel_account,
@@ -2260,11 +1430,11 @@ async def add_hotel_password(
         password
     )
 
-    if error:
+    # -----------------------------------------------------
+    # نجاح
+    # -----------------------------------------------------
 
-        await update.message.reply_text(
-            f"❌ فشل إنشاء الحساب:\n\n{error}"
-        )
+    if hotel_id:
 
         context.user_data.pop(
             "new_hotel_name",
@@ -2281,11 +1451,30 @@ async def add_hotel_password(
             None
         )
 
+        await progress_message.edit_text(
+            "✅ تم إنشاء حساب الفندق بنجاح!\n\n"
+            "━━━━━━━━━━━━━━\n"
+            f"🏨 الفندق: {hotel_name}\n"
+            f"👤 اسم المستخدم: {username}\n"
+            f"🔑 كلمة المرور: {password}\n"
+            f"🆔 رقم الحساب: {hotel_id}\n"
+            "━━━━━━━━━━━━━━\n\n"
+            "📱 يمكن للفندق الآن استخدام:\n"
+            "/login"
+        )
+
         return ConversationHandler.END
 
-    # =====================================================
-    # نجاح
-    # =====================================================
+    # -----------------------------------------------------
+    # فشل
+    # -----------------------------------------------------
+
+    await progress_message.edit_text(
+        "❌ لم يتم إنشاء حساب الفندق.\n\n"
+        f"{error or 'حدث خطأ غير معروف.'}\n\n"
+        "يمكنك المحاولة من جديد عبر:\n"
+        "/add_hotel"
+    )
 
     context.user_data.pop(
         "new_hotel_name",
@@ -2297,22 +1486,22 @@ async def add_hotel_password(
         None
     )
 
-    context.user_data.pop(
-        "new_hotel_password",
-        None
-    )
+    return ConversationHandler.END
+
+
+# =========================================================
+# إلغاء إنشاء الفندق
+# =========================================================
+
+async def cancel(
+    update,
+    context
+):
+
+    context.user_data.clear()
 
     await update.message.reply_text(
-
-        "✅ تم إنشاء حساب الفندق بنجاح.\n\n"
-
-        f"🏨 الفندق: {hotel_name}\n"
-        f"👤 اسم المستخدم: {username}\n"
-        f"🔑 كلمة المرور: {password}\n"
-        f"🆔 رقم الحساب: {hotel_id}\n\n"
-
-        "📌 يمكن للفندق الآن تسجيل الدخول باستخدام:\n"
-        "/login"
+        "❌ تم إلغاء العملية."
     )
 
     return ConversationHandler.END
@@ -2342,13 +1531,12 @@ async def hotels_list(
     if not hotels:
 
         await update.message.reply_text(
-            "📋 لا توجد حسابات فنادق حالياً."
+            "📋 لا توجد حسابات فنادق."
         )
 
         return
 
-    text = "🏨 قائمة حسابات الفنادق\n\n"
-
+    text = "🏨 حسابات الفنادق\n\n"
     keyboard = []
 
     for hotel in hotels:
@@ -2366,7 +1554,7 @@ async def hotels_list(
         )
 
         text += (
-            f"#{hotel['id']}\n"
+            f"🆔 {hotel['id']}\n"
             f"🏨 {hotel['hotel_name']}\n"
             f"👤 {hotel['username']}\n"
             f"📌 {status}\n"
@@ -2379,7 +1567,7 @@ async def hotels_list(
                 [
                     InlineKeyboardButton(
                         f"🗑️ تعطيل {hotel['hotel_name']}",
-                        callback_data=f"delete_hotel:{hotel['id']}"
+                        callback_data=f"disable:{hotel['id']}"
                     )
                 ]
             )
@@ -2390,7 +1578,7 @@ async def hotels_list(
                 [
                     InlineKeyboardButton(
                         f"♻️ تفعيل {hotel['hotel_name']}",
-                        callback_data=f"enable_hotel:{hotel['id']}"
+                        callback_data=f"enable:{hotel['id']}"
                     )
                 ]
             )
@@ -2404,7 +1592,7 @@ async def hotels_list(
 
 
 # =========================================================
-# حذف الفندق
+# تعطيل الفندق
 # =========================================================
 
 async def delete_hotel_command(
@@ -2434,7 +1622,7 @@ async def delete_hotel_command(
                 [
                     InlineKeyboardButton(
                         f"🗑️ {hotel['hotel_name']}",
-                        callback_data=f"delete_hotel:{hotel['id']}"
+                        callback_data=f"disable:{hotel['id']}"
                     )
                 ]
             )
@@ -2448,1017 +1636,10 @@ async def delete_hotel_command(
         return
 
     await update.message.reply_text(
-        "🗑️ اختر الفندق الذي تريد تعطيله:",
+        "🗑️ اختر الفندق:",
         reply_markup=InlineKeyboardMarkup(
             keyboard
         )
-    )
-
-
-# =========================================================
-# بدء نموذج النزيل
-# =========================================================
-
-async def new_guest_start(
-    update,
-    context
-):
-
-    if is_admin(update):
-
-        await update.message.reply_text(
-            "👨‍💼 نموذج النزلاء مخصص لحسابات الفنادق."
-        )
-
-        return ConversationHandler.END
-
-    hotel = await asyncio.to_thread(
-        get_logged_hotel,
-        update.effective_user.id
-    )
-
-    if not hotel:
-
-        await update.message.reply_text(
-            "🔐 يجب تسجيل الدخول أولاً.\n\n"
-            "/login"
-        )
-
-        return ConversationHandler.END
-
-    context.user_data["guest_form"] = {}
-
-    context.user_data["guest_hotel_id"] = hotel["id"]
-
-    context.user_data["guest_account_hotel"] = hotel[
-        "hotel_name"
-    ]
-
-    context.user_data["guest_images"] = []
-
-    await update.message.reply_text(
-        "📋 نموذج تسجيل نزيل جديد\n\n"
-        "1️⃣ الاسم الثلاثي:"
-    )
-
-    return GUEST_NAME
-
-
-# =========================================================
-# الاسم
-# =========================================================
-
-async def guest_name(update, context):
-
-    text = update.message.text.strip()
-
-    if not text:
-
-        await update.message.reply_text(
-            "❌ يرجى إدخال الاسم الثلاثي."
-        )
-
-        return GUEST_NAME
-
-    context.user_data[
-        "guest_form"
-    ]["الاسم الثلاثي"] = text
-
-    await update.message.reply_text(
-        "2️⃣ اسم الأم:"
-    )
-
-    return GUEST_MOTHER
-
-
-# =========================================================
-# اسم الأم
-# =========================================================
-
-async def guest_mother(update, context):
-
-    context.user_data[
-        "guest_form"
-    ]["اسم الأم"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "3️⃣ مكان وتاريخ الولادة:"
-    )
-
-    return GUEST_BIRTH
-
-
-# =========================================================
-# الولادة
-# =========================================================
-
-async def guest_birth(update, context):
-
-    context.user_data[
-        "guest_form"
-    ]["مكان وتاريخ الولادة"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "4️⃣ السكن الأصلي:"
-    )
-
-    return GUEST_HOME
-
-
-# =========================================================
-# السكن
-# =========================================================
-
-async def guest_home(update, context):
-
-    context.user_data[
-        "guest_form"
-    ]["السكن الأصلي"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "5️⃣ اختر المحافظة / الدولة:",
-        reply_markup=governorate_keyboard()
-    )
-
-    return GUEST_GOVERNORATE
-
-
-# =========================================================
-# المحافظة
-# =========================================================
-
-async def guest_governorate_button(
-    update,
-    context
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    try:
-
-        index = int(
-            query.data.split(":")[1]
-        )
-
-        governorate = GOVERNORATES[index]
-
-    except Exception:
-
-        await query.answer(
-            "اختيار غير صالح",
-            show_alert=True
-        )
-
-        return GUEST_GOVERNORATE
-
-    context.user_data[
-        "guest_form"
-    ]["المحافظة"] = governorate
-
-    await query.edit_message_text(
-        f"✅ المحافظة: {governorate}\n\n"
-        "6️⃣ اختر اسم الفندق:",
-        reply_markup=hotel_keyboard(
-            "guest_hotel_select"
-        )
-    )
-
-    return GUEST_HOTEL
-
-
-# =========================================================
-# الفندق
-# =========================================================
-
-async def guest_hotel_button(
-    update,
-    context
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    try:
-
-        index = int(
-            query.data.split(":")[1]
-        )
-
-        selected_hotel = HOTELS[index]
-
-    except Exception:
-
-        await query.answer(
-            "اختيار غير صالح",
-            show_alert=True
-        )
-
-        return GUEST_HOTEL
-
-    account_hotel = context.user_data.get(
-        "guest_account_hotel"
-    )
-
-    if (
-        account_hotel
-        and selected_hotel != account_hotel
-    ):
-
-        await query.answer(
-            "لا يمكنك اختيار فندق آخر غير الفندق المرتبط بحسابك.",
-            show_alert=True
-        )
-
-        return GUEST_HOTEL
-
-    context.user_data[
-        "guest_form"
-    ]["اسم الفندق"] = selected_hotel
-
-    await query.edit_message_text(
-        f"✅ الفندق: {selected_hotel}\n\n"
-        "7️⃣ رقم الجناح:\n\n"
-        "إذا لم يوجد جناح اكتب: لا يوجد"
-    )
-
-    return GUEST_SUITE
-
-
-# =========================================================
-# الجناح
-# =========================================================
-
-async def guest_suite(update, context):
-
-    context.user_data[
-        "guest_form"
-    ]["رقم الجناح"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "8️⃣ رقم الغرفة:"
-    )
-
-    return GUEST_ROOM
-
-
-# =========================================================
-# الغرفة
-# =========================================================
-
-async def guest_room(update, context):
-
-    context.user_data[
-        "guest_form"
-    ]["رقم الغرفة"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "9️⃣ تاريخ النزول:"
-    )
-
-    return GUEST_CHECKIN
-
-
-# =========================================================
-# تاريخ النزول
-# =========================================================
-
-async def guest_checkin(update, context):
-
-    context.user_data[
-        "guest_form"
-    ]["تاريخ النزول"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "🔟 مدة الإقامة:"
-    )
-
-    return GUEST_DURATION
-
-
-# =========================================================
-# مدة الإقامة
-# =========================================================
-
-async def guest_duration(update, context):
-
-    context.user_data[
-        "guest_form"
-    ]["مدة الإقامة"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "1️⃣1️⃣ سبب الإقامة:"
-    )
-
-    return GUEST_REASON
-
-
-# =========================================================
-# سبب الإقامة
-# =========================================================
-
-async def guest_reason(update, context):
-
-    context.user_data[
-        "guest_form"
-    ]["سبب الإقامة"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "📷 الآن ننتقل إلى صور البطاقة الشخصية.\n\n"
-        "🪪 الصورة الأولى:\n"
-        "الوجه الأمامي للبطاقة الشخصية."
-    )
-
-    return GUEST_ID_FRONT
-
-
-# =========================================================
-# صورة الهوية الأمامية
-# =========================================================
-
-async def guest_id_front(
-    update,
-    context
-):
-
-    if not update.message.photo:
-
-        await update.message.reply_text(
-            "❌ يجب إرسال صورة."
-        )
-
-        return GUEST_ID_FRONT
-
-    try:
-
-        photo = update.message.photo[-1]
-
-        telegram_file = await photo.get_file()
-
-        image_buffer = BytesIO()
-
-        await telegram_file.download_to_memory(
-            image_buffer
-        )
-
-        image_buffer.seek(0)
-
-        context.user_data[
-            "guest_images"
-        ].append(
-            image_buffer
-        )
-
-        await update.message.reply_text(
-            "✅ تم استلام الوجه الأمامي.\n\n"
-            "🪪 الآن أرسل الوجه الخلفي:"
-        )
-
-        return GUEST_ID_BACK
-
-    except Exception as e:
-
-        print(
-            "ID front error:",
-            e
-        )
-
-        await update.message.reply_text(
-            "❌ حدث خطأ أثناء استلام الصورة.\n"
-            "أعد إرسالها."
-        )
-
-        return GUEST_ID_FRONT
-
-
-# =========================================================
-# صورة الهوية الخلفية
-# =========================================================
-
-async def guest_id_back(
-    update,
-    context
-):
-
-    if not update.message.photo:
-
-        await update.message.reply_text(
-            "❌ يجب إرسال صورة."
-        )
-
-        return GUEST_ID_BACK
-
-    try:
-
-        photo = update.message.photo[-1]
-
-        telegram_file = await photo.get_file()
-
-        image_buffer = BytesIO()
-
-        await telegram_file.download_to_memory(
-            image_buffer
-        )
-
-        image_buffer.seek(0)
-
-        context.user_data[
-            "guest_images"
-        ].append(
-            image_buffer
-        )
-
-        await update.message.reply_text(
-            "✅ تم استلام الوجه الخلفي.\n\n"
-            "⏳ يتم تجهيز البيانات..."
-        )
-
-        return await finish_guest_form(
-            update,
-            context
-        )
-
-    except Exception as e:
-
-        print(
-            "ID back error:",
-            e
-        )
-
-        await update.message.reply_text(
-            "❌ حدث خطأ أثناء استلام الصورة."
-        )
-
-        return GUEST_ID_BACK
-
-
-# =========================================================
-# مراجعة البيانات
-# =========================================================
-
-async def finish_guest_form(
-    update,
-    context
-):
-
-    form = context.user_data.get(
-        "guest_form",
-        {}
-    )
-
-    images = context.user_data.get(
-        "guest_images",
-        []
-    )
-
-    text = (
-
-        "📋 مراجعة بيانات النزيل\n\n"
-
-        f"👤 الاسم الثلاثي: "
-        f"{form.get('الاسم الثلاثي', '')}\n\n"
-
-        f"👩 اسم الأم: "
-        f"{form.get('اسم الأم', '')}\n\n"
-
-        f"🎂 مكان وتاريخ الولادة: "
-        f"{form.get('مكان وتاريخ الولادة', '')}\n\n"
-
-        f"🏠 السكن الأصلي: "
-        f"{form.get('السكن الأصلي', '')}\n\n"
-
-        f"📍 المحافظة: "
-        f"{form.get('المحافظة', '')}\n\n"
-
-        f"🏨 الفندق: "
-        f"{form.get('اسم الفندق', '')}\n\n"
-
-        f"🏢 الجناح: "
-        f"{form.get('رقم الجناح', '')}\n\n"
-
-        f"🚪 الغرفة: "
-        f"{form.get('رقم الغرفة', '')}\n\n"
-
-        f"📅 تاريخ النزول: "
-        f"{form.get('تاريخ النزول', '')}\n\n"
-
-        f"⏱️ مدة الإقامة: "
-        f"{form.get('مدة الإقامة', '')}\n\n"
-
-        f"🎯 سبب الإقامة: "
-        f"{form.get('سبب الإقامة', '')}\n\n"
-
-        f"🪪 الوجه الأمامي: "
-        f"{'✅' if len(images) >= 1 else '❌'}\n"
-
-        f"🪪 الوجه الخلفي: "
-        f"{'✅' if len(images) >= 2 else '❌'}\n\n"
-
-        "يرجى مراجعة المعلومات قبل الإرسال."
-    )
-
-    keyboard = [
-
-        [
-            InlineKeyboardButton(
-                "📤 إرسال المعلومات للإدارة",
-                callback_data="send_guest_to_admin"
-            )
-        ],
-
-        [
-            InlineKeyboardButton(
-                "❌ إلغاء",
-                callback_data="cancel_guest_form"
-            )
-        ]
-    ]
-
-    await update.message.reply_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(
-            keyboard
-        )
-    )
-
-    return ConversationHandler.END
-
-
-# =========================================================
-# إرسال للإدارة
-# =========================================================
-
-async def send_guest_to_admin(
-    update,
-    context
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    if is_admin(update):
-
-        await query.edit_message_text(
-            "⛔ هذا الزر مخصص لحساب الفندق."
-        )
-
-        return
-
-    hotel = await asyncio.to_thread(
-        get_logged_hotel,
-        update.effective_user.id
-    )
-
-    if not hotel:
-
-        await query.edit_message_text(
-            "🔐 انتهت جلسة الدخول."
-        )
-
-        return
-
-    form = context.user_data.get(
-        "guest_form"
-    )
-
-    images = context.user_data.get(
-        "guest_images",
-        []
-    )
-
-    if not form:
-
-        await query.edit_message_text(
-            "❌ لا توجد بيانات لإرسالها."
-        )
-
-        return
-
-    if len(images) != 2:
-
-        await query.edit_message_text(
-            "❌ يجب إرفاق صورتي البطاقة."
-        )
-
-        return
-
-    if form.get("اسم الفندق") != hotel["hotel_name"]:
-
-        await query.edit_message_text(
-            "❌ لا يمكن إرسال البيانات.\n"
-            "اسم الفندق لا يطابق الحساب المسجل."
-        )
-
-        return
-
-    guest_id = await asyncio.to_thread(
-        save_guest,
-        form,
-        update,
-        hotel["id"]
-    )
-
-    pdf_file = await asyncio.to_thread(
-        create_guest_pdf,
-        form,
-        images
-    )
-
-    guest_name = form.get(
-        "الاسم الثلاثي",
-        "نزيل"
-    )
-
-    filename = safe_filename(
-        guest_name
-    )
-
-    admin_caption = (
-
-        "📥 تم استلام بيانات نزيل جديد\n\n"
-
-        f"🏨 الفندق: {hotel['hotel_name']}\n"
-
-        f"👤 الاسم: {guest_name}\n"
-
-        f"📍 المحافظة: "
-        f"{form.get('المحافظة', 'غير مذكور')}\n"
-
-        f"🚪 الغرفة: "
-        f"{form.get('رقم الغرفة', 'غير مذكور')}\n"
-
-        f"📅 تاريخ النزول: "
-        f"{form.get('تاريخ النزول', 'غير مذكور')}\n"
-
-        f"🪪 صور البطاقة: أمامي + خلفي\n"
-
-        f"🆔 رقم السجل: {guest_id}\n\n"
-
-        "📎 التقرير الكامل مرفق بصيغة PDF."
-    )
-
-    if not ADMIN_TELEGRAM_ID:
-
-        await query.edit_message_text(
-            "⚠️ تم حفظ المعلومات، "
-            "لكن ADMIN_TELEGRAM_ID غير محدد."
-        )
-
-        return
-
-    try:
-
-        pdf_file.seek(0)
-
-        await context.bot.send_document(
-
-            chat_id=int(
-                ADMIN_TELEGRAM_ID
-            ),
-
-            document=pdf_file,
-
-            filename=filename,
-
-            caption=admin_caption
-        )
-
-    except Exception as e:
-
-        print(
-            "Admin send error:",
-            e
-        )
-
-        await query.edit_message_text(
-            "⚠️ تم حفظ المعلومات، "
-            "لكن حدث خطأ أثناء إرسالها للإدارة."
-        )
-
-        return
-
-    await query.edit_message_text(
-
-        "بسم الله الرحمن الرحيم 🌿\n\n"
-
-        "✅ تم إرسال معلومات النزيل بنجاح.\n\n"
-
-        "📤 وصلت المعلومات إلى الإدارة.\n\n"
-
-        "🪪 تم إرفاق الوجه الأمامي والخلفي "
-        "للبطاقة الشخصية ضمن ملف PDF.\n\n"
-
-        "👤 يمكنك تسجيل نزيل آخر من خلال:\n"
-        "/new_guest"
-    )
-
-    context.user_data.pop(
-        "guest_form",
-        None
-    )
-
-    context.user_data.pop(
-        "guest_images",
-        None
-    )
-
-    context.user_data.pop(
-        "guest_hotel_id",
-        None
-    )
-
-    context.user_data.pop(
-        "guest_account_hotel",
-        None
-    )
-
-
-# =========================================================
-# إلغاء نموذج النزيل
-# =========================================================
-
-async def cancel_guest_callback(
-    update,
-    context
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    context.user_data.pop(
-        "guest_form",
-        None
-    )
-
-    context.user_data.pop(
-        "guest_images",
-        None
-    )
-
-    context.user_data.pop(
-        "guest_hotel_id",
-        None
-    )
-
-    context.user_data.pop(
-        "guest_account_hotel",
-        None
-    )
-
-    await query.edit_message_text(
-        "❌ تم إلغاء تسجيل النزيل.\n\n"
-        "/new_guest"
-    )
-
-
-# =========================================================
-# التقرير اليومي
-# =========================================================
-
-async def daily_report(
-    update,
-    context
-):
-
-    if not is_admin(update):
-
-        await update.message.reply_text(
-            "⛔ هذا الأمر مخصص للإدارة."
-        )
-
-        return
-
-    target_date = date.today().isoformat()
-
-    rows = await asyncio.to_thread(
-        get_guests_by_date,
-        target_date
-    )
-
-    if not rows:
-
-        await update.message.reply_text(
-            "📋 لا توجد بيانات مسجلة اليوم."
-        )
-
-        return
-
-    total = len(rows)
-
-    governorates = Counter(
-        row["governorate"]
-        for row in rows
-    )
-
-    hotels = Counter(
-        row["hotel"]
-        for row in rows
-    )
-
-    reasons = Counter(
-        row["reason"]
-        for row in rows
-    )
-
-    text = (
-        "📋 تقرير عمل قسم معلومات الفنادق\n\n"
-        f"📅 التاريخ: {target_date}\n\n"
-        f"👥 إجمالي النزلاء: {total}\n\n"
-        "🏠 حسب المحافظة:\n"
-    )
-
-    for name, count in governorates.most_common():
-
-        text += f"• {name}: {count}\n"
-
-    text += "\n🏨 حسب الفندق:\n"
-
-    for name, count in hotels.most_common():
-
-        text += f"• {name}: {count}\n"
-
-    text += "\n🎯 أسباب الإقامة:\n"
-
-    for name, count in reasons.most_common():
-
-        text += f"• {name}: {count}\n"
-
-    await update.message.reply_text(
-        text
-    )
-
-    pdf_file = await asyncio.to_thread(
-        create_daily_pdf,
-        rows,
-        target_date
-    )
-
-    filename = (
-        f"تقرير_عمل_قسم_معلومات_الفنادق_"
-        f"{target_date}.pdf"
-    )
-
-    await update.message.reply_document(
-        document=pdf_file,
-        filename=filename,
-        caption="📋 تم إنشاء التقرير اليومي PDF."
-    )
-
-
-# =========================================================
-# تقرير أمس
-# =========================================================
-
-async def yesterday_report(
-    update,
-    context
-):
-
-    if not is_admin(update):
-
-        await update.message.reply_text(
-            "⛔ هذا الأمر مخصص للإدارة."
-        )
-
-        return
-
-    yesterday = (
-        date.today()
-        - timedelta(days=1)
-    ).isoformat()
-
-    rows = await asyncio.to_thread(
-        get_guests_by_date,
-        yesterday
-    )
-
-    if not rows:
-
-        await update.message.reply_text(
-            f"📋 لا توجد بيانات بتاريخ {yesterday}."
-        )
-
-        return
-
-    pdf_file = await asyncio.to_thread(
-        create_daily_pdf,
-        rows,
-        yesterday
-    )
-
-    filename = (
-        f"تقرير_قسم_معلومات_الفنادق_"
-        f"{yesterday}.pdf"
-    )
-
-    await update.message.reply_document(
-        document=pdf_file,
-        filename=filename,
-        caption=(
-            "📋 تقرير قسم معلومات الفنادق\n"
-            f"📅 {yesterday}"
-        )
-    )
-
-
-# =========================================================
-# التقرير الشهري
-# =========================================================
-
-async def monthly_report(
-    update,
-    context
-):
-
-    if not is_admin(update):
-
-        await update.message.reply_text(
-            "⛔ هذا الأمر مخصص للإدارة."
-        )
-
-        return
-
-    current_month = date.today().strftime(
-        "%Y-%m"
-    )
-
-    rows = await asyncio.to_thread(
-        get_guests_by_month,
-        current_month
-    )
-
-    if not rows:
-
-        await update.message.reply_text(
-            "📋 لا توجد بيانات مسجلة خلال الشهر الحالي."
-        )
-
-        return
-
-    total = len(rows)
-
-    governorates = Counter(
-        row["governorate"]
-        for row in rows
-    )
-
-    hotels = Counter(
-        row["hotel"]
-        for row in rows
-    )
-
-    reasons = Counter(
-        row["reason"]
-        for row in rows
-    )
-
-    text = (
-        "📊 التقرير الشهري\n\n"
-        f"📅 الشهر: {current_month}\n\n"
-        f"👥 إجمالي النزلاء: {total}\n\n"
-        "🏠 حسب المحافظة:\n"
-    )
-
-    for name, count in governorates.most_common():
-
-        text += f"• {name}: {count}\n"
-
-    text += "\n🏨 حسب الفندق:\n"
-
-    for name, count in hotels.most_common():
-
-        text += f"• {name}: {count}\n"
-
-    text += "\n🎯 حسب سبب الإقامة:\n"
-
-    for name, count in reasons.most_common():
-
-        text += f"• {name}: {count}\n"
-
-    await update.message.reply_text(
-        text
-    )
-
-    pdf_file = await asyncio.to_thread(
-        create_daily_pdf,
-        rows,
-        current_month,
-        "التقرير الشهري لقسم معلومات الفنادق"
-    )
-
-    filename = (
-        f"تقرير_قسم_معلومات_الفنادق_"
-        f"{current_month}.pdf"
-    )
-
-    await update.message.reply_document(
-        document=pdf_file,
-        filename=filename,
-        caption="📊 تم إنشاء التقرير الشهري PDF."
     )
 
 
@@ -3485,48 +1666,15 @@ async def admin_callback(
 
     data = query.data
 
-    # حذف الفندق
-    if data.startswith("delete_hotel:"):
-
-        hotel_id = data.split(
-            ":",
-            1
-        )[1]
-
-        keyboard = [
-
-            [
-                InlineKeyboardButton(
-                    "✅ نعم، تعطيل الفندق",
-                    callback_data=f"confirm_delete:{hotel_id}"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    "❌ إلغاء",
-                    callback_data="cancel_delete"
-                )
-            ]
-        ]
-
-        await query.edit_message_text(
-            "⚠️ هل أنت متأكد من تعطيل هذا الفندق؟",
-            reply_markup=InlineKeyboardMarkup(
-                keyboard
-            )
-        )
-
-        return
-
-    # تأكيد الحذف
-    if data.startswith("confirm_delete:"):
+    # تعطيل
+    if data.startswith("disable:"):
 
         hotel_id = int(
-            data.split(
-                ":",
-                1
-            )[1]
+            data.split(":")[1]
+        )
+
+        await query.edit_message_text(
+            "⏳ جارٍ تعطيل الفندق..."
         )
 
         await asyncio.to_thread(
@@ -3540,23 +1688,11 @@ async def admin_callback(
 
         return
 
-    # إلغاء الحذف
-    if data == "cancel_delete":
-
-        await query.edit_message_text(
-            "❌ تم إلغاء العملية."
-        )
-
-        return
-
-    # تفعيل الفندق
-    if data.startswith("enable_hotel:"):
+    # تفعيل
+    if data.startswith("enable:"):
 
         hotel_id = int(
-            data.split(
-                ":",
-                1
-            )[1]
+            data.split(":")[1]
         )
 
         await asyncio.to_thread(
@@ -3572,95 +1708,1114 @@ async def admin_callback(
 
 
 # =========================================================
-# إلغاء Conversation
+# نموذج النزيل
 # =========================================================
 
-async def cancel(
+async def new_guest_start(
     update,
     context
 ):
 
-    context.user_data.clear()
+    if is_admin(update):
+
+        await update.message.reply_text(
+            "👨‍💼 هذا النموذج مخصص لحسابات الفنادق."
+        )
+
+        return ConversationHandler.END
+
+    hotel = await asyncio.to_thread(
+        get_logged_hotel,
+        update.effective_user.id
+    )
+
+    if not hotel:
+
+        await update.message.reply_text(
+            "🔐 يجب تسجيل الدخول أولاً.\n\n"
+            "/login"
+        )
+
+        return ConversationHandler.END
+
+    context.user_data["guest_form"] = {}
+    context.user_data["guest_images"] = []
+    context.user_data["guest_account_hotel"] = hotel["hotel_name"]
+    context.user_data["guest_hotel_id"] = hotel["id"]
 
     await update.message.reply_text(
-        "❌ تم إلغاء العملية."
+        "📋 تسجيل نزيل جديد\n\n"
+        "1️⃣ الاسم الثلاثي:"
+    )
+
+    return GUEST_NAME
+
+
+async def guest_name(update, context):
+
+    text = update.message.text.strip()
+
+    if not text:
+        await update.message.reply_text(
+            "❌ أدخل الاسم."
+        )
+        return GUEST_NAME
+
+    context.user_data["guest_form"][
+        "الاسم الثلاثي"
+    ] = text
+
+    await update.message.reply_text(
+        "2️⃣ اسم الأم:"
+    )
+
+    return GUEST_MOTHER
+
+
+async def guest_mother(update, context):
+
+    context.user_data["guest_form"][
+        "اسم الأم"
+    ] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "3️⃣ مكان وتاريخ الولادة:"
+    )
+
+    return GUEST_BIRTH
+
+
+async def guest_birth(update, context):
+
+    context.user_data["guest_form"][
+        "مكان وتاريخ الولادة"
+    ] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "4️⃣ السكن الأصلي:"
+    )
+
+    return GUEST_HOME
+
+
+async def guest_home(update, context):
+
+    context.user_data["guest_form"][
+        "السكن الأصلي"
+    ] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "5️⃣ اختر المحافظة / الدولة:",
+        reply_markup=governorate_keyboard()
+    )
+
+    return GUEST_GOVERNORATE
+
+
+async def guest_governorate(
+    update,
+    context
+):
+
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        index = int(
+            query.data.split(":")[1]
+        )
+        governorate = GOVERNORATES[index]
+    except Exception:
+        return GUEST_GOVERNORATE
+
+    context.user_data["guest_form"][
+        "المحافظة"
+    ] = governorate
+
+    await query.edit_message_text(
+        f"✅ المحافظة: {governorate}\n\n"
+        "6️⃣ اختر الفندق:",
+        reply_markup=hotel_keyboard(
+            "guest_hotel"
+        )
+    )
+
+    return GUEST_HOTEL
+
+
+async def guest_hotel(
+    update,
+    context
+):
+
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        index = int(
+            query.data.split(":")[1]
+        )
+        hotel_name = HOTELS[index]
+    except Exception:
+        return GUEST_HOTEL
+
+    account_hotel = context.user_data.get(
+        "guest_account_hotel"
+    )
+
+    if hotel_name != account_hotel:
+
+        await query.answer(
+            "لا يمكنك اختيار فندق آخر.",
+            show_alert=True
+        )
+
+        return GUEST_HOTEL
+
+    context.user_data["guest_form"][
+        "اسم الفندق"
+    ] = hotel_name
+
+    await query.edit_message_text(
+        f"✅ الفندق: {hotel_name}\n\n"
+        "7️⃣ رقم الجناح:\n"
+        "إذا لم يوجد اكتب: لا يوجد"
+    )
+
+    return GUEST_SUITE
+
+
+async def guest_suite(update, context):
+
+    context.user_data["guest_form"][
+        "رقم الجناح"
+    ] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "8️⃣ رقم الغرفة:"
+    )
+
+    return GUEST_ROOM
+
+
+async def guest_room(update, context):
+
+    context.user_data["guest_form"][
+        "رقم الغرفة"
+    ] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "9️⃣ تاريخ النزول:"
+    )
+
+    return GUEST_CHECKIN
+
+
+async def guest_checkin(update, context):
+
+    context.user_data["guest_form"][
+        "تاريخ النزول"
+    ] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "🔟 مدة الإقامة:"
+    )
+
+    return GUEST_DURATION
+
+
+async def guest_duration(update, context):
+
+    context.user_data["guest_form"][
+        "مدة الإقامة"
+    ] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "1️⃣1️⃣ سبب الإقامة:"
+    )
+
+    return GUEST_REASON
+
+
+async def guest_reason(update, context):
+
+    context.user_data["guest_form"][
+        "سبب الإقامة"
+    ] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "📷 أرسل صورة الوجه الأمامي للبطاقة الشخصية:"
+    )
+
+    return GUEST_ID_FRONT
+
+
+# =========================================================
+# صور الهوية
+# =========================================================
+
+async def guest_id_front(
+    update,
+    context
+):
+
+    if not update.message.photo:
+
+        await update.message.reply_text(
+            "❌ يجب إرسال صورة."
+        )
+
+        return GUEST_ID_FRONT
+
+    try:
+
+        photo = update.message.photo[-1]
+        telegram_file = await photo.get_file()
+
+        image_buffer = BytesIO()
+
+        await telegram_file.download_to_memory(
+            image_buffer
+        )
+
+        image_buffer.seek(0)
+
+        context.user_data[
+            "guest_images"
+        ].append(image_buffer)
+
+        await update.message.reply_text(
+            "✅ تم استلام الوجه الأمامي.\n\n"
+            "📷 الآن أرسل الوجه الخلفي:"
+        )
+
+        return GUEST_ID_BACK
+
+    except Exception as e:
+
+        print("Front image:", e)
+
+        await update.message.reply_text(
+            "❌ حدث خطأ.\n"
+            "أعد إرسال الصورة."
+        )
+
+        return GUEST_ID_FRONT
+
+
+async def guest_id_back(
+    update,
+    context
+):
+
+    if not update.message.photo:
+
+        await update.message.reply_text(
+            "❌ يجب إرسال صورة."
+        )
+
+        return GUEST_ID_BACK
+
+    try:
+
+        photo = update.message.photo[-1]
+        telegram_file = await photo.get_file()
+
+        image_buffer = BytesIO()
+
+        await telegram_file.download_to_memory(
+            image_buffer
+        )
+
+        image_buffer.seek(0)
+
+        context.user_data[
+            "guest_images"
+        ].append(image_buffer)
+
+        await update.message.reply_text(
+            "⏳ يتم تجهيز التقرير..."
+        )
+
+        return await finish_guest(
+            update,
+            context
+        )
+
+    except Exception as e:
+
+        print("Back image:", e)
+
+        await update.message.reply_text(
+            "❌ حدث خطأ."
+        )
+
+        return GUEST_ID_BACK
+
+
+# =========================================================
+# PDF النزيل
+# =========================================================
+
+def safe_filename(name):
+
+    name = re.sub(
+        r'[\\/:*?"<>|]',
+        "",
+        str(name)
+    )
+
+    name = re.sub(
+        r"\s+",
+        "_",
+        name.strip()
+    )
+
+    return (name or "تقرير_نزيل") + ".pdf"
+
+
+def create_guest_pdf(
+    guest,
+    images
+):
+
+    buffer = BytesIO()
+
+    pdf = canvas.Canvas(
+        buffer,
+        pagesize=A4
+    )
+
+    hotel = guest.get(
+        "اسم الفندق",
+        "الفندق"
+    )
+
+    pdf.setFillColor(
+        colors.HexColor("#17365D")
+    )
+
+    pdf.roundRect(
+        35,
+        PAGE_HEIGHT - 105,
+        PAGE_WIDTH - 70,
+        70,
+        8,
+        fill=1,
+        stroke=0
+    )
+
+    pdf.setFillColor(colors.white)
+
+    pdf.setFont(
+        PDF_FONT,
+        18
+    )
+
+    pdf.drawCentredString(
+        PAGE_WIDTH / 2,
+        PAGE_HEIGHT - 63,
+        arabic_text(hotel)
+    )
+
+    pdf.setFont(
+        PDF_FONT,
+        11
+    )
+
+    pdf.drawCentredString(
+        PAGE_WIDTH / 2,
+        PAGE_HEIGHT - 84,
+        arabic_text(
+            "تقرير بيانات نزيل"
+        )
+    )
+
+    y = PAGE_HEIGHT - 135
+
+    fields = [
+        ("الاسم الثلاثي", guest.get("الاسم الثلاثي", "")),
+        ("اسم الأم", guest.get("اسم الأم", "")),
+        ("مكان وتاريخ الولادة", guest.get("مكان وتاريخ الولادة", "")),
+        ("السكن الأصلي", guest.get("السكن الأصلي", "")),
+        ("المحافظة", guest.get("المحافظة", "")),
+        ("اسم الفندق", guest.get("اسم الفندق", "")),
+        ("رقم الجناح", guest.get("رقم الجناح", "")),
+        ("رقم الغرفة", guest.get("رقم الغرفة", "")),
+        ("تاريخ النزول", guest.get("تاريخ النزول", "")),
+        ("مدة الإقامة", guest.get("مدة الإقامة", "")),
+        ("سبب الإقامة", guest.get("سبب الإقامة", "")),
+    ]
+
+    pdf.setFillColor(colors.black)
+    pdf.setFont(PDF_FONT, 10)
+
+    for label, value in fields:
+
+        if y < 70:
+
+            pdf.showPage()
+
+            y = PAGE_HEIGHT - 70
+
+        pdf.setFillColor(
+            colors.HexColor("#F3F6F8")
+        )
+
+        pdf.roundRect(
+            45,
+            y - 25,
+            PAGE_WIDTH - 90,
+            30,
+            4,
+            fill=1,
+            stroke=0
+        )
+
+        pdf.setFillColor(colors.black)
+
+        pdf.drawRightString(
+            PAGE_WIDTH - 60,
+            y - 16,
+            arabic_text(
+                f"{label}: {value}"
+            )
+        )
+
+        y -= 38
+
+    # -----------------------------------------------------
+    # صور البطاقة
+    # -----------------------------------------------------
+
+    for index, image_data in enumerate(images):
+
+        pdf.showPage()
+
+        title = (
+            "الوجه الأمامي للبطاقة"
+            if index == 0
+            else "الوجه الخلفي للبطاقة"
+        )
+
+        pdf.setFont(
+            PDF_FONT,
+            15
+        )
+
+        pdf.setFillColor(
+            colors.HexColor("#17365D")
+        )
+
+        pdf.drawCentredString(
+            PAGE_WIDTH / 2,
+            PAGE_HEIGHT - 60,
+            arabic_text(title)
+        )
+
+        try:
+
+            image_data.seek(0)
+
+            image = ImageReader(
+                image_data
+            )
+
+            iw, ih = image.getSize()
+
+            max_w = PAGE_WIDTH - 80
+            max_h = PAGE_HEIGHT - 150
+
+            scale = min(
+                max_w / iw,
+                max_h / ih
+            )
+
+            width = iw * scale
+            height = ih * scale
+
+            pdf.drawImage(
+                image,
+                (PAGE_WIDTH - width) / 2,
+                (PAGE_HEIGHT - height) / 2,
+                width=width,
+                height=height,
+                preserveAspectRatio=True,
+                mask="auto"
+            )
+
+        except Exception as e:
+
+            print(
+                "PDF image:",
+                e
+            )
+
+    pdf.save()
+
+    buffer.seek(0)
+
+    return buffer
+
+
+# =========================================================
+# مراجعة النزيل
+# =========================================================
+
+async def finish_guest(
+    update,
+    context
+):
+
+    form = context.user_data.get(
+        "guest_form",
+        {}
+    )
+
+    images = context.user_data.get(
+        "guest_images",
+        []
+    )
+
+    text = (
+        "📋 مراجعة بيانات النزيل\n\n"
+        f"👤 الاسم: {form.get('الاسم الثلاثي', '')}\n"
+        f"👩 الأم: {form.get('اسم الأم', '')}\n"
+        f"🎂 الولادة: {form.get('مكان وتاريخ الولادة', '')}\n"
+        f"🏠 السكن: {form.get('السكن الأصلي', '')}\n"
+        f"📍 المحافظة: {form.get('المحافظة', '')}\n"
+        f"🏨 الفندق: {form.get('اسم الفندق', '')}\n"
+        f"🏢 الجناح: {form.get('رقم الجناح', '')}\n"
+        f"🚪 الغرفة: {form.get('رقم الغرفة', '')}\n"
+        f"📅 النزول: {form.get('تاريخ النزول', '')}\n"
+        f"⏱️ المدة: {form.get('مدة الإقامة', '')}\n"
+        f"🎯 السبب: {form.get('سبب الإقامة', '')}\n\n"
+        f"🪪 الصور: {len(images)}/2"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "📤 إرسال المعلومات للإدارة",
+                callback_data="send_guest"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "❌ إلغاء",
+                callback_data="cancel_guest"
+            )
+        ]
+    ]
+
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        )
     )
 
     return ConversationHandler.END
 
 
 # =========================================================
-# خادم Render
+# إرسال النزيل للإدارة
 # =========================================================
 
-class HealthHandler(
-    BaseHTTPRequestHandler
+async def send_guest(
+    update,
+    context
 ):
 
-    def do_GET(self):
+    query = update.callback_query
 
-        self.send_response(200)
+    await query.answer()
 
-        self.send_header(
-            "Content-type",
-            "text/plain; charset=utf-8"
+    hotel = await asyncio.to_thread(
+        get_logged_hotel,
+        update.effective_user.id
+    )
+
+    if not hotel:
+
+        await query.edit_message_text(
+            "🔐 انتهت جلسة الدخول."
         )
 
-        self.end_headers()
+        return
 
-        self.wfile.write(
-            b"Hotel Report Bot is running"
+    form = context.user_data.get(
+        "guest_form"
+    )
+
+    images = context.user_data.get(
+        "guest_images",
+        []
+    )
+
+    if not form or len(images) != 2:
+
+        await query.edit_message_text(
+            "❌ البيانات أو الصور غير مكتملة."
         )
 
-    def log_message(
-        self,
-        format,
-        *args
-    ):
+        return
 
-        pass
+    if form.get(
+        "اسم الفندق"
+    ) != hotel["hotel_name"]:
 
+        await query.edit_message_text(
+            "❌ الفندق لا يطابق الحساب."
+        )
 
-def run_web_server():
+        return
 
-    port = int(
-        os.environ.get(
-            "PORT",
-            "10000"
+    await query.edit_message_text(
+        "⏳ جارٍ حفظ البيانات وإنشاء التقرير..."
+    )
+
+    guest_id = await asyncio.to_thread(
+        save_guest,
+        form,
+        update,
+        hotel["id"]
+    )
+
+    pdf_file = await asyncio.to_thread(
+        create_guest_pdf,
+        form,
+        images
+    )
+
+    if not ADMIN_TELEGRAM_ID:
+
+        await query.edit_message_text(
+            "⚠️ تم حفظ البيانات، لكن لم يتم تحديد "
+            "ADMIN_TELEGRAM_ID."
+        )
+
+        return
+
+    filename = safe_filename(
+        form.get(
+            "الاسم الثلاثي",
+            "نزيل"
         )
     )
 
-    server = HTTPServer(
-        (
-            "0.0.0.0",
-            port
-        ),
-        HealthHandler
+    caption = (
+        "📥 تم استلام بيانات نزيل جديد\n\n"
+        f"🏨 الفندق: {hotel['hotel_name']}\n"
+        f"👤 الاسم: {form.get('الاسم الثلاثي', '')}\n"
+        f"📍 المحافظة: {form.get('المحافظة', '')}\n"
+        f"🚪 الغرفة: {form.get('رقم الغرفة', '')}\n"
+        f"🆔 رقم السجل: {guest_id}\n\n"
+        "📎 التقرير الكامل مرفق."
     )
 
-    print(
-        f"Web server running on port {port}"
-    )
+    try:
 
-    server.serve_forever()
+        pdf_file.seek(0)
+
+        await context.bot.send_document(
+            chat_id=int(ADMIN_TELEGRAM_ID),
+            document=pdf_file,
+            filename=filename,
+            caption=caption
+        )
+
+    except Exception as e:
+
+        print(
+            "Admin send:",
+            e
+        )
+
+        await query.edit_message_text(
+            "⚠️ تم حفظ البيانات، لكن تعذر إرسال "
+            "التقرير إلى الإدارة."
+        )
+
+        return
+
+    context.user_data.clear()
+
+    await query.edit_message_text(
+        "✅ تم إرسال بيانات النزيل إلى الإدارة بنجاح.\n\n"
+        "📎 تم إرسال التقرير مع صور البطاقة.\n\n"
+        "/new_guest"
+    )
 
 
 # =========================================================
-# إنشاء التطبيق
+# إلغاء النزيل
 # =========================================================
 
-if not TOKEN:
+async def cancel_guest(
+    update,
+    context
+):
 
-    print(
-        "WARNING: BOT_TOKEN is not set!"
+    query = update.callback_query
+
+    await query.answer()
+
+    context.user_data.clear()
+
+    await query.edit_message_text(
+        "❌ تم إلغاء تسجيل النزيل."
     )
 
 
-app = (
-    ApplicationBuilder()
-    .token(TOKEN)
-    .build()
-)
+# =========================================================
+# التقرير PDF
+# =========================================================
+
+def create_report_pdf(
+    rows,
+    report_date,
+    title
+):
+
+    buffer = BytesIO()
+
+    pdf = canvas.Canvas(
+        buffer,
+        pagesize=A4
+    )
+
+    total = len(rows)
+
+    governorates = Counter(
+        row["governorate"]
+        for row in rows
+    )
+
+    hotels = Counter(
+        row["hotel"]
+        for row in rows
+    )
+
+    reasons = Counter(
+        row["reason"]
+        for row in rows
+    )
+
+    pdf.setFillColor(
+        colors.HexColor("#17365D")
+    )
+
+    pdf.roundRect(
+        35,
+        PAGE_HEIGHT - 105,
+        PAGE_WIDTH - 70,
+        70,
+        8,
+        fill=1,
+        stroke=0
+    )
+
+    pdf.setFillColor(colors.white)
+
+    pdf.setFont(
+        PDF_FONT,
+        16
+    )
+
+    pdf.drawCentredString(
+        PAGE_WIDTH / 2,
+        PAGE_HEIGHT - 63,
+        arabic_text(title)
+    )
+
+    y = PAGE_HEIGHT - 135
+
+    pdf.setFillColor(colors.black)
+
+    pdf.setFont(
+        PDF_FONT,
+        12
+    )
+
+    pdf.drawRightString(
+        PAGE_WIDTH - 50,
+        y,
+        arabic_text(
+            f"التاريخ: {report_date}"
+        )
+    )
+
+    y -= 35
+
+    pdf.drawRightString(
+        PAGE_WIDTH - 50,
+        y,
+        arabic_text(
+            f"إجمالي النزلاء: {total}"
+        )
+    )
+
+    y -= 40
+
+    sections = [
+        ("حسب المحافظة", governorates),
+        ("حسب الفندق", hotels),
+        ("حسب سبب الإقامة", reasons),
+    ]
+
+    for section_title, counter in sections:
+
+        if y < 100:
+
+            pdf.showPage()
+            y = PAGE_HEIGHT - 80
+
+        pdf.setFillColor(
+            colors.HexColor("#17365D")
+        )
+
+        pdf.setFont(
+            PDF_FONT,
+            13
+        )
+
+        pdf.drawRightString(
+            PAGE_WIDTH - 50,
+            y,
+            arabic_text(section_title)
+        )
+
+        y -= 28
+
+        pdf.setFillColor(colors.black)
+
+        pdf.setFont(
+            PDF_FONT,
+            10
+        )
+
+        for name, count in counter.most_common():
+
+            if y < 60:
+
+                pdf.showPage()
+                y = PAGE_HEIGHT - 80
+
+            pdf.drawRightString(
+                PAGE_WIDTH - 70,
+                y,
+                arabic_text(
+                    f"{name}: {count}"
+                )
+            )
+
+            y -= 22
+
+        y -= 15
+
+    pdf.save()
+
+    buffer.seek(0)
+
+    return buffer
+
+
+# =========================================================
+# التقرير اليومي
+# =========================================================
+
+async def daily_report(
+    update,
+    context
+):
+
+    if not is_admin(update):
+
+        await update.message.reply_text(
+            "⛔ هذا الأمر مخصص للإدارة."
+        )
+
+        return
+
+    target = date.today().isoformat()
+
+    rows = await asyncio.to_thread(
+        get_guests_by_date,
+        target
+    )
+
+    if not rows:
+
+        await update.message.reply_text(
+            "📋 لا توجد بيانات مسجلة اليوم."
+        )
+
+        return
+
+    governorates = Counter(
+        row["governorate"]
+        for row in rows
+    )
+
+    hotels = Counter(
+        row["hotel"]
+        for row in rows
+    )
+
+    text = (
+        "📊 التقرير اليومي\n\n"
+        f"📅 {target}\n"
+        f"👥 إجمالي النزلاء: {len(rows)}\n\n"
+        "📍 المحافظات:\n"
+    )
+
+    for name, count in governorates.most_common():
+        text += f"• {name}: {count}\n"
+
+    text += "\n🏨 الفنادق:\n"
+
+    for name, count in hotels.most_common():
+        text += f"• {name}: {count}\n"
+
+    await update.message.reply_text(text)
+
+    pdf_file = await asyncio.to_thread(
+        create_report_pdf,
+        rows,
+        target,
+        "التقرير اليومي لقسم معلومات الفنادق"
+    )
+
+    await update.message.reply_document(
+        document=pdf_file,
+        filename=f"daily_{target}.pdf",
+        caption="📎 التقرير اليومي PDF"
+    )
+
+
+# =========================================================
+# تقرير أمس
+# =========================================================
+
+async def yesterday_report(
+    update,
+    context
+):
+
+    if not is_admin(update):
+
+        await update.message.reply_text(
+            "⛔ هذا الأمر مخصص للإدارة."
+        )
+
+        return
+
+    target = (
+        date.today()
+        - timedelta(days=1)
+    ).isoformat()
+
+    rows = await asyncio.to_thread(
+        get_guests_by_date,
+        target
+    )
+
+    if not rows:
+
+        await update.message.reply_text(
+            f"📋 لا توجد بيانات بتاريخ {target}."
+        )
+
+        return
+
+    pdf_file = await asyncio.to_thread(
+        create_report_pdf,
+        rows,
+        target,
+        "تقرير قسم معلومات الفنادق"
+    )
+
+    await update.message.reply_document(
+        document=pdf_file,
+        filename=f"yesterday_{target}.pdf",
+        caption=f"📋 تقرير {target}"
+    )
+
+
+# =========================================================
+# التقرير الشهري
+# =========================================================
+
+async def monthly_report(
+    update,
+    context
+):
+
+    if not is_admin(update):
+
+        await update.message.reply_text(
+            "⛔ هذا الأمر مخصص للإدارة."
+        )
+
+        return
+
+    month = date.today().strftime(
+        "%Y-%m"
+    )
+
+    rows = await asyncio.to_thread(
+        get_guests_by_month,
+        month
+    )
+
+    if not rows:
+
+        await update.message.reply_text(
+            "📋 لا توجد بيانات خلال الشهر الحالي."
+        )
+
+        return
+
+    governorates = Counter(
+        row["governorate"]
+        for row in rows
+    )
+
+    hotels = Counter(
+        row["hotel"]
+        for row in rows
+    )
+
+    text = (
+        "📈 التقرير الشهري\n\n"
+        f"📅 الشهر: {month}\n"
+        f"👥 إجمالي النزلاء: {len(rows)}\n\n"
+        "📍 المحافظات:\n"
+    )
+
+    for name, count in governorates.most_common():
+        text += f"• {name}: {count}\n"
+
+    text += "\n🏨 الفنادق:\n"
+
+    for name, count in hotels.most_common():
+        text += f"• {name}: {count}\n"
+
+    await update.message.reply_text(text)
+
+    pdf_file = await asyncio.to_thread(
+        create_report_pdf,
+        rows,
+        month,
+        "التقرير الشهري لقسم معلومات الفنادق"
+    )
+
+    await update.message.reply_document(
+        document=pdf_file,
+        filename=f"monthly_{month}.pdf",
+        caption="📎 التقرير الشهري PDF"
+    )
 
 
 # =========================================================
@@ -3705,7 +2860,12 @@ hotel_login_handler = ConversationHandler(
 
 
 # =========================================================
-# Conversation إضافة الفندق - مصححة
+# Conversation إنشاء حساب الفندق
+#
+# الإصلاح الأساسي هنا:
+#
+# اختيار الفندق أصبح داخل ConversationHandler
+# وليس Handler خارج المحادثة.
 # =========================================================
 
 add_hotel_handler = ConversationHandler(
@@ -3719,19 +2879,20 @@ add_hotel_handler = ConversationHandler(
 
     states={
 
+        ADD_HOTEL_SELECT: [
+
+            CallbackQueryHandler(
+                add_hotel_select,
+                pattern=r"^create_hotel:"
+            )
+        ],
+
         ADD_HOTEL_USERNAME: [
 
-            # اختيار الفندق
-            CallbackQueryHandler(
-                add_hotel_select_button,
-                pattern=r"^admin_hotel_select:"
-            ),
-
-            # إدخال اسم المستخدم
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND,
                 add_hotel_username
-            ),
+            )
         ],
 
         ADD_HOTEL_PASSWORD: [
@@ -3739,7 +2900,7 @@ add_hotel_handler = ConversationHandler(
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND,
                 add_hotel_password
-            ),
+            )
         ],
     },
 
@@ -3755,7 +2916,7 @@ add_hotel_handler = ConversationHandler(
 
 
 # =========================================================
-# Conversation نموذج النزيل
+# Conversation النزيل
 # =========================================================
 
 guest_form_handler = ConversationHandler(
@@ -3799,15 +2960,15 @@ guest_form_handler = ConversationHandler(
 
         GUEST_GOVERNORATE: [
             CallbackQueryHandler(
-                guest_governorate_button,
-                pattern=r"^governorate_select:"
+                guest_governorate,
+                pattern=r"^governorate:"
             )
         ],
 
         GUEST_HOTEL: [
             CallbackQueryHandler(
-                guest_hotel_button,
-                pattern=r"^guest_hotel_select:"
+                guest_hotel,
+                pattern=r"^guest_hotel:"
             )
         ],
 
@@ -3873,7 +3034,25 @@ guest_form_handler = ConversationHandler(
 
 
 # =========================================================
-# Handlers الأساسية
+# إنشاء التطبيق
+# =========================================================
+
+if not TOKEN:
+
+    print(
+        "WARNING: BOT_TOKEN غير موجود."
+    )
+
+
+app = (
+    ApplicationBuilder()
+    .token(TOKEN)
+    .build()
+)
+
+
+# =========================================================
+# Handlers
 # =========================================================
 
 app.add_handler(
@@ -3886,6 +3065,10 @@ app.add_handler(
 app.add_handler(
     hotel_login_handler
 )
+
+# مهم جداً:
+# يجب تسجيل Conversation إضافة الفندق
+# قبل أي Callback عام.
 
 app.add_handler(
     add_hotel_handler
@@ -3940,24 +3123,27 @@ app.add_handler(
 
 # =========================================================
 # Callback الإدارة
+#
+# لاحظ أننا لا نضع create_hotel هنا.
+# إنشاء الفندق أصبح داخل ConversationHandler.
 # =========================================================
 
 app.add_handler(
     CallbackQueryHandler(
         admin_callback,
-        pattern=r"^(delete_hotel:|confirm_delete:|cancel_delete|enable_hotel:)"
+        pattern=r"^(disable:|enable:)"
     )
 )
 
 
 # =========================================================
-# إرسال النزيل للإدارة
+# إرسال النزيل
 # =========================================================
 
 app.add_handler(
     CallbackQueryHandler(
-        send_guest_to_admin,
-        pattern=r"^send_guest_to_admin$"
+        send_guest,
+        pattern=r"^send_guest$"
     )
 )
 
@@ -3968,8 +3154,8 @@ app.add_handler(
 
 app.add_handler(
     CallbackQueryHandler(
-        cancel_guest_callback,
-        pattern=r"^cancel_guest_form$"
+        cancel_guest,
+        pattern=r"^cancel_guest$"
     )
 )
 
@@ -3990,7 +3176,7 @@ async def unknown_message(
 
         await update.message.reply_text(
             "👨‍💼 أنت في حساب الإدارة.\n\n"
-            "استخدم قائمة الأوامر."
+            "استخدم القائمة أو الأوامر."
         )
 
         return
@@ -4005,14 +3191,14 @@ async def unknown_message(
         await update.message.reply_text(
             "🏨 الفندق:\n"
             f"{hotel['hotel_name']}\n\n"
-            "لتسجيل نزيل جديد:\n"
+            "👤 تسجيل نزيل:\n"
             "/new_guest"
         )
 
         return
 
     await update.message.reply_text(
-        "🔐 يرجى تسجيل الدخول أولاً.\n\n"
+        "🔐 يرجى تسجيل الدخول:\n"
         "/login"
     )
 
@@ -4026,11 +3212,65 @@ app.add_handler(
 
 
 # =========================================================
+# خادم Render
+# =========================================================
+
+class HealthHandler(
+    BaseHTTPRequestHandler
+):
+
+    def do_GET(self):
+
+        self.send_response(200)
+
+        self.send_header(
+            "Content-type",
+            "text/plain; charset=utf-8"
+        )
+
+        self.end_headers()
+
+        self.wfile.write(
+            b"Hotel Report Bot is running"
+        )
+
+    def log_message(
+        self,
+        format,
+        *args
+    ):
+
+        pass
+
+
+def run_web_server():
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            "10000"
+        )
+    )
+
+    server = HTTPServer(
+        ("0.0.0.0", port),
+        HealthHandler
+    )
+
+    print(
+        f"Web server running on port {port}"
+    )
+
+    server.serve_forever()
+
+
+# =========================================================
 # التشغيل
 # =========================================================
 
 async def main():
 
+    # قاعدة البيانات
     await asyncio.to_thread(
         init_database
     )
@@ -4038,7 +3278,7 @@ async def main():
     if not TOKEN:
 
         print(
-            "ERROR: BOT_TOKEN is not set!"
+            "ERROR: BOT_TOKEN غير موجود."
         )
 
         return
@@ -4046,9 +3286,10 @@ async def main():
     if not ADMIN_TELEGRAM_ID:
 
         print(
-            "WARNING: ADMIN_TELEGRAM_ID is not set!"
+            "WARNING: ADMIN_TELEGRAM_ID غير موجود."
         )
 
+    # Render health server
     threading.Thread(
         target=run_web_server,
         daemon=True
@@ -4063,7 +3304,15 @@ async def main():
     )
 
     print(
-        "Telegram Bot is running successfully!"
+        "================================="
+    )
+
+    print(
+        "Hotel Report Bot Started"
+    )
+
+    print(
+        "================================="
     )
 
     try:
@@ -4087,4 +3336,4 @@ if __name__ == "__main__":
 
     asyncio.run(
         main()
-        )
+    )
