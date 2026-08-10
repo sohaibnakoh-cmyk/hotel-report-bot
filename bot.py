@@ -71,6 +71,8 @@ def clean_text(text):
         r"^\s*\d+\s*[-.)]\s*",
         "",
         text,
+        import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
         flags=re.MULTILINE
     )
 
@@ -1060,6 +1062,20 @@ async def main():
         await app.stop()
         await app.shutdown()
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write("Bot is running".encode())
 
+    def log_message(self, format, *args):
+        pass
+
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server.serve_forever()
 if __name__ == "__main__":
     asyncio.run(main())
