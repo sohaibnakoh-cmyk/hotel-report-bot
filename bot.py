@@ -298,7 +298,10 @@ def init_database():
         logger.info("Database initialized successfully")
 
     except Exception as e:
-        logger.exception("Database initialization error: %s", e)
+        logger.exception(
+            "Database initialization error: %s",
+            e,
+        )
 
     finally:
         connection.close()
@@ -448,10 +451,12 @@ def create_hotel_account(
 
     except Exception as e:
         connection.rollback()
+
         logger.exception(
             "Create hotel account error: %s",
             e,
         )
+
         return False, None, "حدث خطأ أثناء إنشاء الحساب."
 
     finally:
@@ -494,6 +499,7 @@ def authenticate_hotel(username, password):
             "Authentication error: %s",
             e,
         )
+
         return None
 
     finally:
@@ -881,17 +887,23 @@ def safe_filename(name):
 
 
 # =========================================================
-# PDF
+# PDF - أدوات التصميم
 # =========================================================
 
-def draw_pdf_title(
+PDF_BLUE = colors.HexColor("#17365D")
+PDF_LIGHT_BLUE = colors.HexColor("#D9EAF7")
+PDF_BORDER = colors.HexColor("#B7C9D6")
+PDF_LIGHT = colors.HexColor("#F6F8FA")
+PDF_TEXT = colors.HexColor("#333333")
+PDF_GREY = colors.HexColor("#6B7280")
+
+
+def draw_pdf_header(
     pdf,
-    hotel_name,
-    subtitle="تقرير بيانات نزيل",
+    title,
+    subtitle=None,
 ):
-    pdf.setFillColor(
-        colors.HexColor("#17365D")
-    )
+    pdf.setFillColor(PDF_BLUE)
 
     pdf.roundRect(
         35,
@@ -905,21 +917,70 @@ def draw_pdf_title(
 
     pdf.setFillColor(colors.white)
 
-    pdf.setFont(PDF_FONT, 18)
+    pdf.setFont(
+        PDF_FONT,
+        17,
+    )
 
     pdf.drawCentredString(
         PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 63,
-        arabic_text(hotel_name),
+        PAGE_HEIGHT - 60,
+        arabic_text(title),
     )
 
-    pdf.setFont(PDF_FONT, 11)
+    if subtitle:
+        pdf.setFont(
+            PDF_FONT,
+            9,
+        )
 
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 84,
-        arabic_text(subtitle),
+        pdf.drawCentredString(
+            PAGE_WIDTH / 2,
+            PAGE_HEIGHT - 82,
+            arabic_text(subtitle),
+        )
+
+    pdf.setFillColor(colors.black)
+
+
+def draw_pdf_footer(
+    pdf,
+    hotel_name=None,
+    page_number=None,
+):
+    pdf.setStrokeColor(PDF_BORDER)
+
+    pdf.line(
+        40,
+        42,
+        PAGE_WIDTH - 40,
+        42,
     )
+
+    pdf.setFont(
+        PDF_FONT,
+        7,
+    )
+
+    pdf.setFillColor(PDF_GREY)
+
+    if hotel_name:
+        pdf.drawRightString(
+            PAGE_WIDTH - 45,
+            27,
+            arabic_text(
+                f"الفندق: {hotel_name}"
+            ),
+        )
+
+    if page_number is not None:
+        pdf.drawCentredString(
+            PAGE_WIDTH / 2,
+            27,
+            arabic_text(
+                f"صفحة {page_number}"
+            ),
+        )
 
     pdf.setFillColor(colors.black)
 
@@ -929,9 +990,7 @@ def draw_pdf_section_title(
     y,
     title,
 ):
-    pdf.setFillColor(
-        colors.HexColor("#D9EAF7")
-    )
+    pdf.setFillColor(PDF_LIGHT_BLUE)
 
     pdf.roundRect(
         45,
@@ -943,11 +1002,12 @@ def draw_pdf_section_title(
         stroke=0,
     )
 
-    pdf.setFillColor(
-        colors.HexColor("#17365D")
-    )
+    pdf.setFillColor(PDF_BLUE)
 
-    pdf.setFont(PDF_FONT, 12)
+    pdf.setFont(
+        PDF_FONT,
+        12,
+    )
 
     pdf.drawRightString(
         PAGE_WIDTH - 60,
@@ -963,40 +1023,98 @@ def draw_pdf_section_title(
 def draw_pdf_field(
     pdf,
     y,
+    number,
     label,
     value,
 ):
     value = str(
-        value if value is not None else ""
+        value
+        if value is not None
+        else ""
     )
 
-    pdf.setFillColor(
-        colors.HexColor("#F6F8FA")
-    )
+    # رقم الحقل
+    pdf.setFillColor(PDF_BLUE)
 
     pdf.roundRect(
-        45,
-        y - 27,
-        PAGE_WIDTH - 90,
-        31,
+        47,
+        y - 25,
+        28,
+        24,
         4,
         fill=1,
         stroke=0,
     )
 
-    pdf.setFillColor(
-        colors.HexColor("#333333")
+    pdf.setFillColor(colors.white)
+
+    pdf.setFont(
+        PDF_FONT,
+        9,
     )
 
-    pdf.setFont(PDF_FONT, 9)
+    pdf.drawCentredString(
+        61,
+        y - 17,
+        str(number),
+    )
+
+    # خلفية البيانات
+    pdf.setFillColor(PDF_LIGHT)
+
+    pdf.roundRect(
+        82,
+        y - 27,
+        PAGE_WIDTH - 127,
+        28,
+        4,
+        fill=1,
+        stroke=0,
+    )
+
+    # اسم الحقل
+    pdf.setFillColor(PDF_BLUE)
+
+    pdf.setFont(
+        PDF_FONT,
+        9,
+    )
 
     pdf.drawRightString(
         PAGE_WIDTH - 60,
-        y - 17,
+        y - 16,
         arabic_text(
-            f"{label}: {value}"
+            f"{label}:"
         ),
     )
+
+    # خط تحت الحقل
+    pdf.setStrokeColor(PDF_BORDER)
+
+    pdf.line(
+        95,
+        y - 30,
+        PAGE_WIDTH - 60,
+        y - 30,
+    )
+
+    # القيمة
+    pdf.setFillColor(PDF_TEXT)
+
+    pdf.setFont(
+        PDF_FONT,
+        9,
+    )
+
+    value_text = arabic_text(value)
+
+    pdf.drawString(
+        95,
+        y - 16,
+        value_text,
+    )
+
+    pdf.setFillColor(colors.black)
 
     return y - 38
 
@@ -1013,7 +1131,7 @@ def draw_id_image(
         image = ImageReader(image_data)
 
         max_width = PAGE_WIDTH - 100
-        max_height = 280
+        max_height = 410
 
         iw, ih = image.getSize()
 
@@ -1028,9 +1146,7 @@ def draw_id_image(
         width = iw * scale
         height = ih * scale
 
-        pdf.setFillColor(
-            colors.HexColor("#17365D")
-        )
+        pdf.setFillColor(PDF_BLUE)
 
         pdf.setFont(
             PDF_FONT,
@@ -1043,17 +1159,19 @@ def draw_id_image(
             arabic_text(title),
         )
 
-        y -= 20
+        y -= 25
 
-        pdf.setStrokeColor(
-            colors.HexColor("#B7C9D6")
-        )
+        # إطار الصورة
+        pdf.setStrokeColor(PDF_BORDER)
 
-        pdf.rect(
-            (PAGE_WIDTH - width) / 2 - 5,
-            y - height - 5,
-            width + 10,
-            height + 10,
+        pdf.setLineWidth(1.2)
+
+        pdf.roundRect(
+            (PAGE_WIDTH - width) / 2 - 8,
+            y - height - 8,
+            width + 16,
+            height + 16,
+            6,
             fill=0,
             stroke=1,
         )
@@ -1080,6 +1198,10 @@ def draw_id_image(
         return y - 30
 
 
+# =========================================================
+# PDF - تقرير بيانات النزيل
+# =========================================================
+
 def create_guest_pdf(
     guest,
     images=None,
@@ -1096,7 +1218,11 @@ def create_guest_pdf(
         "الفندق",
     )
 
-    draw_pdf_title(
+    # -----------------------------------------------------
+    # الصفحة الأولى
+    # -----------------------------------------------------
+
+    draw_pdf_header(
         pdf,
         hotel_name,
         "تقرير بيانات نزيل",
@@ -1109,7 +1235,7 @@ def create_guest_pdf(
         8,
     )
 
-    pdf.setFillColor(colors.grey)
+    pdf.setFillColor(PDF_GREY)
 
     now = datetime.now().strftime(
         "%Y-%m-%d %H:%M"
@@ -1208,12 +1334,20 @@ def create_guest_pdf(
         ),
     ]
 
-    for label, value in fields:
-
+    for number, (label, value) in enumerate(
+        fields,
+        start=1,
+    ):
         if y < 80:
+            draw_pdf_footer(
+                pdf,
+                hotel_name,
+                1,
+            )
+
             pdf.showPage()
 
-            draw_pdf_title(
+            draw_pdf_header(
                 pdf,
                 hotel_name,
                 "تقرير بيانات نزيل",
@@ -1224,15 +1358,21 @@ def create_guest_pdf(
         y = draw_pdf_field(
             pdf,
             y,
+            number,
             label,
             value,
         )
 
+    # -----------------------------------------------------
+    # صور البطاقة
+    # -----------------------------------------------------
+
     if images and len(images) >= 2:
 
+        # الوجه الأمامي
         pdf.showPage()
 
-        draw_pdf_title(
+        draw_pdf_header(
             pdf,
             hotel_name,
             "صور البطاقة الشخصية",
@@ -1253,9 +1393,16 @@ def create_guest_pdf(
             y - 15,
         )
 
+        draw_pdf_footer(
+            pdf,
+            hotel_name,
+            2,
+        )
+
+        # الوجه الخلفي
         pdf.showPage()
 
-        draw_pdf_title(
+        draw_pdf_header(
             pdf,
             hotel_name,
             "صور البطاقة الشخصية",
@@ -1276,20 +1423,18 @@ def create_guest_pdf(
             y - 15,
         )
 
-    pdf.setFont(
-        PDF_FONT,
-        7,
-    )
+        draw_pdf_footer(
+            pdf,
+            hotel_name,
+            3,
+        )
 
-    pdf.setFillColor(colors.grey)
-
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        25,
-        arabic_text(
-            f"الفندق: {hotel_name}"
-        ),
-    )
+    else:
+        draw_pdf_footer(
+            pdf,
+            hotel_name,
+            1,
+        )
 
     pdf.save()
 
@@ -1297,6 +1442,10 @@ def create_guest_pdf(
 
     return buffer
 
+
+# =========================================================
+# PDF - التقرير اليومي / الشهري
+# =========================================================
 
 def create_daily_pdf(
     rows,
@@ -1310,11 +1459,13 @@ def create_daily_pdf(
         pagesize=A4,
     )
 
-    y = PAGE_HEIGHT - 120
+    page_number = 1
 
-    pdf.setFillColor(
-        colors.HexColor("#17365D")
-    )
+    # -----------------------------------------------------
+    # الترويسة
+    # -----------------------------------------------------
+
+    pdf.setFillColor(PDF_BLUE)
 
     pdf.roundRect(
         35,
@@ -1335,11 +1486,13 @@ def create_daily_pdf(
 
     pdf.drawCentredString(
         PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 63,
+        PAGE_HEIGHT - 60,
         arabic_text(title),
     )
 
     pdf.setFillColor(colors.black)
+
+    y = PAGE_HEIGHT - 120
 
     pdf.setFont(
         PDF_FONT,
@@ -1373,80 +1526,206 @@ def create_daily_pdf(
         for row in rows
     )
 
+    # -----------------------------------------------------
+    # إجمالي النزلاء
+    # -----------------------------------------------------
+
+    pdf.setFillColor(PDF_LIGHT_BLUE)
+
+    pdf.roundRect(
+        45,
+        y - 35,
+        PAGE_WIDTH - 90,
+        40,
+        6,
+        fill=1,
+        stroke=0,
+    )
+
+    pdf.setFillColor(PDF_BLUE)
+
     pdf.setFont(
         PDF_FONT,
         14,
     )
 
     pdf.drawRightString(
-        PAGE_WIDTH - 50,
-        y,
+        PAGE_WIDTH - 60,
+        y - 21,
         arabic_text(
             f"إجمالي النزلاء: {total}"
         ),
     )
 
-    y -= 40
+    y -= 60
+
+    # -----------------------------------------------------
+    # دالة أقسام الإحصائيات
+    # -----------------------------------------------------
 
     def draw_counter_section(
+        section_number,
         section_title,
         counter,
     ):
         nonlocal y
+        nonlocal page_number
 
-        if y < 120:
+        if y < 150:
+            draw_pdf_footer(
+                pdf,
+                None,
+                page_number,
+            )
+
             pdf.showPage()
+
+            page_number += 1
+
             y = PAGE_HEIGHT - 120
+
+        # عنوان القسم
+        pdf.setFillColor(PDF_LIGHT_BLUE)
+
+        pdf.roundRect(
+            45,
+            y - 30,
+            PAGE_WIDTH - 90,
+            35,
+            6,
+            fill=1,
+            stroke=0,
+        )
+
+        pdf.setFillColor(PDF_BLUE)
 
         pdf.setFont(
             PDF_FONT,
-            13,
+            12,
         )
 
         pdf.drawRightString(
-            PAGE_WIDTH - 50,
-            y,
-            arabic_text(section_title),
+            PAGE_WIDTH - 60,
+            y - 19,
+            arabic_text(
+                f"{section_number}. {section_title}"
+            ),
         )
 
-        y -= 30
+        y -= 50
 
         pdf.setFont(
             PDF_FONT,
             10,
         )
 
-        for name, count in counter.most_common():
+        for item_number, (
+            name,
+            count,
+        ) in enumerate(
+            counter.most_common(),
+            start=1,
+        ):
 
             if y < 70:
+                draw_pdf_footer(
+                    pdf,
+                    None,
+                    page_number,
+                )
+
                 pdf.showPage()
+
+                page_number += 1
+
                 y = PAGE_HEIGHT - 120
+
+            # رقم
+            pdf.setFillColor(PDF_BLUE)
+
+            pdf.roundRect(
+                55,
+                y - 20,
+                23,
+                21,
+                4,
+                fill=1,
+                stroke=0,
+            )
+
+            pdf.setFillColor(colors.white)
+
+            pdf.setFont(
+                PDF_FONT,
+                8,
+            )
+
+            pdf.drawCentredString(
+                66.5,
+                y - 14,
+                str(item_number),
+            )
+
+            # النص
+            pdf.setFillColor(PDF_TEXT)
+
+            pdf.setFont(
+                PDF_FONT,
+                10,
+            )
 
             pdf.drawRightString(
                 PAGE_WIDTH - 70,
-                y,
+                y - 14,
                 arabic_text(
-                    f"• {name}: {count}"
+                    f"{name}: {count}"
                 ),
             )
 
-            y -= 22
+            # تسطير
+            pdf.setStrokeColor(PDF_BORDER)
 
-        y -= 12
+            pdf.line(
+                90,
+                y - 25,
+                PAGE_WIDTH - 70,
+                y - 25,
+            )
+
+            y -= 30
+
+        y -= 15
+
+    # -----------------------------------------------------
+    # الأقسام
+    # -----------------------------------------------------
 
     draw_counter_section(
-        "أولاً: التوزيع حسب المحافظة",
+        1,
+        "التوزيع حسب المحافظة",
         governorates,
     )
 
     draw_counter_section(
-        "ثانياً: توزيع النزلاء على الفنادق",
+        2,
+        "توزيع النزلاء على الفنادق",
         hotels,
     )
 
     draw_counter_section(
-        "ثالثاً: أسباب الإقامة",
+        3,
+        "أسباب الإقامة",
         reasons,
+    )
+
+    # -----------------------------------------------------
+    # التذييل
+    # -----------------------------------------------------
+
+    draw_pdf_footer(
+        pdf,
+        None,
+        page_number,
     )
 
     pdf.save()
@@ -1460,9 +1739,7 @@ def create_daily_pdf(
 # رسالة الترحيب والصورة
 # =========================================================
 
-async def send_welcome_image(
-    update: Update,
-):
+async def send_welcome_image(update: Update):
     if not update.message:
         return
 
@@ -1474,7 +1751,6 @@ async def send_welcome_image(
             IMAGE_FILE,
             "rb",
         ) as photo:
-
             await update.message.reply_photo(
                 photo=photo
             )
@@ -1617,7 +1893,6 @@ async def start(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     try:
-
         if not update.effective_user:
             return
 
@@ -1637,10 +1912,8 @@ async def start(
                 update.effective_chat.id,
             )
 
-            # الصورة أولاً
             await send_welcome_image(update)
 
-            # ثم الرسالة
             await update.message.reply_text(
                 "بسم الله الرحمن الرحيم 🌿\n\n"
                 "﴿ وَقُلْ رَبِّ زِدْنِي عِلْمًا ﴾\n"
@@ -1678,10 +1951,8 @@ async def start(
                 update.effective_chat.id,
             )
 
-            # الصورة أولاً
             await send_welcome_image(update)
 
-            # ثم الرسالة
             await update.message.reply_text(
                 "بسم الله الرحمن الرحيم 🌿\n\n"
                 "﴿ وَقُلْ رَبِّ زِدْنِي عِلْمًا ﴾\n"
@@ -1705,10 +1976,8 @@ async def start(
             update.effective_chat.id,
         )
 
-        # الصورة أولاً
         await send_welcome_image(update)
 
-        # ثم الرسالة
         await update.message.reply_text(
             "بسم الله الرحمن الرحيم 🌿\n\n"
             "﴿ وَقُلْ رَبِّ زِدْنِي عِلْمًا ﴾\n"
@@ -1721,7 +1990,6 @@ async def start(
         )
 
     except Exception as e:
-
         logger.exception(
             "START ERROR: %s",
             e,
@@ -1749,7 +2017,6 @@ async def login_start(
         return ConversationHandler.END
 
     if is_admin(update):
-
         await update.message.reply_text(
             "👨‍💼 أنت المدير ولا تحتاج إلى تسجيل الدخول."
         )
@@ -1762,7 +2029,6 @@ async def login_start(
     )
 
     if hotel:
-
         await update.message.reply_text(
             "✅ أنت مسجل الدخول بالفعل.\n\n"
             f"🏨 الفندق: {hotel['hotel_name']}"
@@ -1792,7 +2058,6 @@ async def login_username(
     )
 
     if not username:
-
         await update.message.reply_text(
             "❌ اسم المستخدم فارغ.\n"
             "أرسل اسم المستخدم من جديد:"
@@ -1822,7 +2087,6 @@ async def login_password(
     )
 
     if not username:
-
         await update.message.reply_text(
             "❌ انتهت عملية تسجيل الدخول.\n\n"
             "استخدم /login من جديد."
@@ -1837,7 +2101,6 @@ async def login_password(
     )
 
     if not account:
-
         context.user_data.pop(
             "login_username",
             None,
@@ -1865,7 +2128,6 @@ async def login_password(
         and str(old_telegram_id)
         != current_telegram_id
     ):
-
         await update.message.reply_text(
             "⚠️ هذا الحساب مرتبط مسبقاً "
             "بحساب Telegram آخر.\n\n"
@@ -1911,7 +2173,6 @@ async def logout(
     context,
 ):
     if is_admin(update):
-
         await update.message.reply_text(
             "👨‍💼 حساب المدير لا يحتاج إلى تسجيل خروج."
         )
@@ -1946,7 +2207,6 @@ def hotel_keyboard(prefix):
     row = []
 
     for index, hotel in enumerate(HOTELS):
-
         row.append(
             InlineKeyboardButton(
                 f"🏨 {hotel}",
@@ -1961,7 +2221,9 @@ def hotel_keyboard(prefix):
     if row:
         keyboard.append(row)
 
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(
+        keyboard
+    )
 
 
 # =========================================================
@@ -1975,7 +2237,6 @@ def governorate_keyboard():
     for index, governorate in enumerate(
         GOVERNORATES
     ):
-
         row.append(
             InlineKeyboardButton(
                 f"📍 {governorate}",
@@ -1992,7 +2253,9 @@ def governorate_keyboard():
     if row:
         keyboard.append(row)
 
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(
+        keyboard
+    )
 
 
 # =========================================================
@@ -2004,7 +2267,6 @@ async def add_hotel_start(
     context,
 ):
     if not is_admin(update):
-
         await update.message.reply_text(
             "⛔ هذا الأمر مخصص للإدارة."
         )
@@ -2044,7 +2306,6 @@ async def add_hotel_username(
     )
 
     if not hotel_name:
-
         await update.message.reply_text(
             "❌ لم يتم اختيار الفندق.\n\n"
             "ابدأ من جديد:\n"
@@ -2061,7 +2322,6 @@ async def add_hotel_username(
         r"^[a-z0-9_.-]{3,50}$",
         username,
     ):
-
         await update.message.reply_text(
             "❌ اسم المستخدم غير صالح.\n\n"
             "استخدم أحرفاً إنجليزية صغيرة "
@@ -2102,7 +2362,6 @@ async def add_hotel_password(
     )
 
     if not hotel_name:
-
         await update.message.reply_text(
             "❌ لم يتم اختيار الفندق.\n\n"
             "/add_hotel"
@@ -2111,7 +2370,6 @@ async def add_hotel_password(
         return ConversationHandler.END
 
     if not username:
-
         await update.message.reply_text(
             "❌ لم يتم تسجيل اسم المستخدم.\n\n"
             "/add_hotel"
@@ -2120,7 +2378,6 @@ async def add_hotel_password(
         return ConversationHandler.END
 
     if len(password) < 8:
-
         await update.message.reply_text(
             "❌ كلمة المرور يجب أن تكون "
             "8 أحرف على الأقل.\n\n"
@@ -2143,7 +2400,6 @@ async def add_hotel_password(
     )
 
     if not success:
-
         await update.message.reply_text(
             "❌ لم يتم إنشاء الحساب.\n\n"
             f"السبب:\n{error}\n\n"
@@ -2185,7 +2441,6 @@ async def hotels_list(
     context,
 ):
     if not is_admin(update):
-
         await update.message.reply_text(
             "⛔ هذا الأمر مخصص للإدارة."
         )
@@ -2197,7 +2452,6 @@ async def hotels_list(
     )
 
     if not hotels:
-
         await update.message.reply_text(
             "📋 لا توجد حسابات فنادق حالياً."
         )
@@ -2209,7 +2463,6 @@ async def hotels_list(
     keyboard = []
 
     for hotel in hotels:
-
         status = (
             "🟢 فعال"
             if hotel["active"]
@@ -2232,7 +2485,6 @@ async def hotels_list(
         )
 
         if hotel["active"]:
-
             keyboard.append([
                 InlineKeyboardButton(
                     f"🗑️ تعطيل {hotel['hotel_name']}",
@@ -2241,9 +2493,7 @@ async def hotels_list(
                     ),
                 )
             ])
-
         else:
-
             keyboard.append([
                 InlineKeyboardButton(
                     f"♻️ تفعيل {hotel['hotel_name']}",
@@ -2272,7 +2522,6 @@ async def delete_hotel_command(
     context,
 ):
     if not is_admin(update):
-
         await update.message.reply_text(
             "⛔ هذا الأمر مخصص للإدارة."
         )
@@ -2286,9 +2535,7 @@ async def delete_hotel_command(
     keyboard = []
 
     for hotel in hotels:
-
         if hotel["active"]:
-
             keyboard.append([
                 InlineKeyboardButton(
                     f"🗑️ {hotel['hotel_name']}",
@@ -2299,7 +2546,6 @@ async def delete_hotel_command(
             ])
 
     if not keyboard:
-
         await update.message.reply_text(
             "📋 لا توجد فنادق فعالة."
         )
@@ -2323,7 +2569,6 @@ async def new_guest_start(
     context,
 ):
     if is_admin(update):
-
         await update.message.reply_text(
             "👨‍💼 نموذج النزلاء مخصص "
             "لحسابات الفنادق."
@@ -2337,7 +2582,6 @@ async def new_guest_start(
     )
 
     if not hotel:
-
         await update.message.reply_text(
             "🔐 يجب تسجيل الدخول أولاً.\n\n"
             "/login"
@@ -2376,7 +2620,6 @@ async def guest_name(
     text = update.message.text.strip()
 
     if not text:
-
         await update.message.reply_text(
             "❌ يرجى إدخال الاسم الثلاثي."
         )
@@ -2401,7 +2644,6 @@ async def guest_mother(
     text = update.message.text.strip()
 
     if not text:
-
         await update.message.reply_text(
             "❌ يرجى إدخال اسم الأم."
         )
@@ -2426,7 +2668,6 @@ async def guest_birth(
     text = update.message.text.strip()
 
     if not text:
-
         await update.message.reply_text(
             "❌ يرجى إدخال مكان وتاريخ الولادة."
         )
@@ -2451,7 +2692,6 @@ async def guest_home(
     text = update.message.text.strip()
 
     if not text:
-
         await update.message.reply_text(
             "❌ يرجى إدخال السكن الأصلي."
         )
@@ -2479,7 +2719,6 @@ async def guest_governorate_button(
     await query.answer()
 
     try:
-
         index = int(
             query.data.split(":")[1]
         )
@@ -2487,7 +2726,6 @@ async def guest_governorate_button(
         governorate = GOVERNORATES[index]
 
     except Exception:
-
         await query.answer(
             "اختيار غير صالح",
             show_alert=True,
@@ -2528,7 +2766,6 @@ async def guest_suite(
     text = update.message.text.strip()
 
     if not text:
-
         await update.message.reply_text(
             "❌ أدخل رقم الجناح أو اكتب: لا يوجد"
         )
@@ -2553,7 +2790,6 @@ async def guest_room(
     text = update.message.text.strip()
 
     if not text:
-
         await update.message.reply_text(
             "❌ يرجى إدخال رقم الغرفة."
         )
@@ -2578,7 +2814,6 @@ async def guest_checkin(
     text = update.message.text.strip()
 
     if not text:
-
         await update.message.reply_text(
             "❌ يرجى إدخال تاريخ النزول."
         )
@@ -2603,7 +2838,6 @@ async def guest_duration(
     text = update.message.text.strip()
 
     if not text:
-
         await update.message.reply_text(
             "❌ يرجى إدخال مدة الإقامة."
         )
@@ -2628,7 +2862,6 @@ async def guest_reason(
     text = update.message.text.strip()
 
     if not text:
-
         await update.message.reply_text(
             "❌ يرجى إدخال سبب الإقامة."
         )
@@ -2656,7 +2889,6 @@ async def guest_id_front(
     context,
 ):
     if not update.message.photo:
-
         await update.message.reply_text(
             "❌ يجب إرسال صورة."
         )
@@ -2664,7 +2896,6 @@ async def guest_id_front(
         return GUEST_ID_FRONT
 
     try:
-
         photo = update.message.photo[-1]
 
         telegram_file = await photo.get_file()
@@ -2689,7 +2920,6 @@ async def guest_id_front(
         return GUEST_ID_BACK
 
     except Exception as e:
-
         logger.exception(
             "ID front error: %s",
             e,
@@ -2712,7 +2942,6 @@ async def guest_id_back(
     context,
 ):
     if not update.message.photo:
-
         await update.message.reply_text(
             "❌ يجب إرسال صورة."
         )
@@ -2720,7 +2949,6 @@ async def guest_id_back(
         return GUEST_ID_BACK
 
     try:
-
         photo = update.message.photo[-1]
 
         telegram_file = await photo.get_file()
@@ -2750,7 +2978,6 @@ async def guest_id_back(
         return ConversationHandler.END
 
     except Exception as e:
-
         logger.exception(
             "ID back error: %s",
             e,
@@ -2854,7 +3081,6 @@ async def send_guest_to_admin(
     )
 
     if is_admin(update):
-
         await query.edit_message_text(
             "⛔ هذا الزر مخصص لحسابات الفنادق."
         )
@@ -2867,7 +3093,6 @@ async def send_guest_to_admin(
     )
 
     if not hotel:
-
         await query.edit_message_text(
             "🔐 انتهت جلسة الدخول.\n\n"
             "/login"
@@ -2885,7 +3110,6 @@ async def send_guest_to_admin(
     )
 
     if not form:
-
         await query.edit_message_text(
             "❌ لا توجد بيانات لإرسالها."
         )
@@ -2893,7 +3117,6 @@ async def send_guest_to_admin(
         return
 
     if len(images) != 2:
-
         await query.edit_message_text(
             "❌ يجب إرفاق صورتي البطاقة."
         )
@@ -2904,7 +3127,6 @@ async def send_guest_to_admin(
         form.get("اسم الفندق")
         != hotel["hotel_name"]
     ):
-
         await query.edit_message_text(
             "❌ اسم الفندق لا يطابق الحساب."
         )
@@ -2912,7 +3134,6 @@ async def send_guest_to_admin(
         return
 
     if not ADMIN_TELEGRAM_ID:
-
         await query.edit_message_text(
             "⚠️ تم حفظ المعلومات، "
             "لكن ADMIN_TELEGRAM_ID غير محدد."
@@ -2921,7 +3142,6 @@ async def send_guest_to_admin(
         return
 
     try:
-
         guest_id = await asyncio.to_thread(
             save_guest,
             form,
@@ -2992,7 +3212,6 @@ async def send_guest_to_admin(
             )
 
     except Exception as e:
-
         logger.exception(
             "Send guest error: %s",
             e,
@@ -3100,7 +3319,6 @@ async def daily_report(
     context,
 ):
     if not is_admin(update):
-
         await update.message.reply_text(
             "⛔ هذا الأمر مخصص للإدارة."
         )
@@ -3115,7 +3333,6 @@ async def daily_report(
     )
 
     if not rows:
-
         await update.message.reply_text(
             "📋 لا توجد بيانات مسجلة اليوم."
         )
@@ -3153,7 +3370,6 @@ async def yesterday_report(
     context,
 ):
     if not is_admin(update):
-
         await update.message.reply_text(
             "⛔ هذا الأمر مخصص للإدارة."
         )
@@ -3171,7 +3387,6 @@ async def yesterday_report(
     )
 
     if not rows:
-
         await update.message.reply_text(
             f"📋 لا توجد بيانات بتاريخ "
             f"{yesterday}."
@@ -3203,7 +3418,6 @@ async def monthly_report(
     context,
 ):
     if not is_admin(update):
-
         await update.message.reply_text(
             "⛔ هذا الأمر مخصص للإدارة."
         )
@@ -3220,7 +3434,6 @@ async def monthly_report(
     )
 
     if not rows:
-
         await update.message.reply_text(
             "📋 لا توجد بيانات مسجلة "
             "خلال الشهر الحالي."
@@ -3266,7 +3479,6 @@ async def admin_callback(
     query = update.callback_query
 
     if not is_admin(update):
-
         await query.answer(
             "⛔ غير مصرح لك.",
             show_alert=True,
@@ -3283,9 +3495,7 @@ async def admin_callback(
     if data.startswith(
         "admin_create_hotel:"
     ):
-
         try:
-
             index = int(
                 data.split(":")[1]
             )
@@ -3293,7 +3503,6 @@ async def admin_callback(
             hotel_name = HOTELS[index]
 
         except Exception:
-
             await query.answer(
                 "اختيار غير صالح.",
                 show_alert=True,
@@ -3317,7 +3526,6 @@ async def admin_callback(
         )
 
         if existing_active:
-
             await query.answer(
                 "يوجد حساب فعال لهذا الفندق.",
                 show_alert=True,
@@ -3356,15 +3564,12 @@ async def admin_callback(
     if data.startswith(
         "delete_hotel:"
     ):
-
         try:
-
             hotel_id = int(
                 data.split(":", 1)[1]
             )
 
         except Exception:
-
             await query.answer(
                 "رقم الحساب غير صحيح.",
                 show_alert=True,
@@ -3409,15 +3614,12 @@ async def admin_callback(
     if data.startswith(
         "confirm_delete:"
     ):
-
         try:
-
             hotel_id = int(
                 data.split(":", 1)[1]
             )
 
         except Exception:
-
             await query.answer(
                 "رقم الحساب غير صحيح.",
                 show_alert=True,
@@ -3445,7 +3647,6 @@ async def admin_callback(
     # -----------------------------------------------------
 
     if data == "cancel_delete":
-
         await query.answer()
 
         await query.edit_message_text(
@@ -3461,15 +3662,12 @@ async def admin_callback(
     if data.startswith(
         "enable_hotel:"
     ):
-
         try:
-
             hotel_id = int(
                 data.split(":", 1)[1]
             )
 
         except Exception:
-
             await query.answer(
                 "رقم الحساب غير صحيح.",
                 show_alert=True,
@@ -3515,9 +3713,7 @@ async def cancel(
 class HealthHandler(
     BaseHTTPRequestHandler
 ):
-
     def do_GET(self):
-
         self.send_response(200)
 
         self.send_header(
@@ -3540,7 +3736,6 @@ class HealthHandler(
 
 
 def run_web_server():
-
     port = int(
         os.environ.get(
             "PORT",
@@ -3569,7 +3764,6 @@ def run_web_server():
 # =========================================================
 
 def build_application():
-
     application = (
         ApplicationBuilder()
         .token(TOKEN)
@@ -3589,7 +3783,6 @@ def build_application():
         ],
 
         states={
-
             LOGIN_USERNAME: [
                 MessageHandler(
                     filters.TEXT
@@ -3630,7 +3823,6 @@ def build_application():
         ],
 
         states={
-
             ADD_HOTEL_USERNAME: [
                 MessageHandler(
                     filters.TEXT
@@ -3671,7 +3863,6 @@ def build_application():
         ],
 
         states={
-
             GUEST_NAME: [
                 MessageHandler(
                     filters.TEXT
@@ -3901,7 +4092,6 @@ async def unknown_message(
         return
 
     if is_admin(update):
-
         await update.message.reply_text(
             "👨‍💼 أنت في حساب الإدارة.\n\n"
             "استخدم قائمة الأوامر."
@@ -3915,7 +4105,6 @@ async def unknown_message(
     )
 
     if hotel:
-
         await update.message.reply_text(
             "🏨 الفندق:\n"
             f"{hotel['hotel_name']}\n\n"
@@ -3950,9 +4139,7 @@ async def error_handler(
 # =========================================================
 
 def main():
-
     if not TOKEN:
-
         logger.error(
             "BOT_TOKEN is not set!"
         )
@@ -3960,7 +4147,6 @@ def main():
         return
 
     if not ADMIN_TELEGRAM_ID:
-
         logger.warning(
             "ADMIN_TELEGRAM_ID is not set!"
         )
