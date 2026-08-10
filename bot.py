@@ -1,6 +1,9 @@
 import os
 import sqlite3
 import logging
+import threading
+
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime
 
 from telegram import (
@@ -23,8 +26,12 @@ from telegram.ext import (
 # الإعدادات
 # =========================================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+
+try:
+    ADMIN_ID = int(os.getenv("ADMIN_ID", "0").strip())
+except ValueError:
+    ADMIN_ID = 0
 
 DB_FILE = "hotel_bot.db"
 
@@ -38,7 +45,7 @@ LOGIN_PASSWORD = "123456"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,146 +64,185 @@ def get_db():
 def init_db():
 
     conn = get_db()
-    cur = conn.cursor()
 
-    # جدول المستخدمين
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            telegram_id INTEGER PRIMARY KEY,
-            username TEXT,
-            logged_in INTEGER DEFAULT 0,
-            login_time TEXT
-        )
-    """)
+    try:
 
-    # جدول النزلاء
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS guests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER,
-            full_name TEXT,
-            mother_name TEXT,
-            birth_place_date TEXT,
-            original_residence TEXT,
-            governorate TEXT,
-            hotel_name TEXT,
-            suite_number TEXT,
-            room_number TEXT,
-            stay_duration TEXT,
-            stay_reason TEXT,
-            created_at TEXT
-        )
-    """)
+        cur = conn.cursor()
 
-    conn.commit()
-    conn.close()
+        # -------------------------------------------------
+        # جدول المستخدمين
+        # -------------------------------------------------
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                telegram_id INTEGER PRIMARY KEY,
+                username TEXT,
+                logged_in INTEGER DEFAULT 0,
+                login_time TEXT
+            )
+        """)
+
+        # -------------------------------------------------
+        # جدول النزلاء
+        # -------------------------------------------------
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS guests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER,
+                full_name TEXT,
+                mother_name TEXT,
+                birth_place_date TEXT,
+                original_residence TEXT,
+                governorate TEXT,
+                hotel_name TEXT,
+                suite_number TEXT,
+                room_number TEXT,
+                stay_duration TEXT,
+                stay_reason TEXT,
+                created_at TEXT
+            )
+        """)
+
+        conn.commit()
+
+    finally:
+
+        conn.close()
 
 
 def register_user(user_id, username=""):
 
     conn = get_db()
 
-    conn.execute("""
-        INSERT INTO users
-        (telegram_id, username)
-        VALUES (?, ?)
+    try:
 
-        ON CONFLICT(telegram_id)
-        DO UPDATE SET username = excluded.username
-    """, (
-        user_id,
-        username
-    ))
+        conn.execute("""
+            INSERT INTO users
+            (
+                telegram_id,
+                username
+            )
+            VALUES (?, ?)
 
-    conn.commit()
-    conn.close()
+            ON CONFLICT(telegram_id)
+            DO UPDATE SET
+                username = excluded.username
+        """, (
+            user_id,
+            username,
+        ))
+
+        conn.commit()
+
+    finally:
+
+        conn.close()
 
 
 def set_login(user_id, status):
 
     conn = get_db()
 
-    login_time = (
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if status
-        else None
-    )
+    try:
 
-    conn.execute("""
-        UPDATE users
-        SET logged_in = ?,
-            login_time = ?
-        WHERE telegram_id = ?
-    """, (
-        1 if status else 0,
-        login_time,
-        user_id
-    ))
+        login_time = (
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if status
+            else None
+        )
 
-    conn.commit()
-    conn.close()
+        conn.execute("""
+            UPDATE users
+            SET
+                logged_in = ?,
+                login_time = ?
+            WHERE telegram_id = ?
+        """, (
+            1 if status else 0,
+            login_time,
+            user_id,
+        ))
+
+        conn.commit()
+
+    finally:
+
+        conn.close()
 
 
 def is_logged_in(user_id):
 
     conn = get_db()
 
-    row = conn.execute("""
-        SELECT logged_in
-        FROM users
-        WHERE telegram_id = ?
-    """, (user_id,)).fetchone()
+    try:
 
-    conn.close()
+        row = conn.execute("""
+            SELECT logged_in
+            FROM users
+            WHERE telegram_id = ?
+        """, (user_id,)).fetchone()
 
-    return bool(row and row["logged_in"] == 1)
+        return bool(
+            row and row["logged_in"] == 1
+        )
+
+    finally:
+
+        conn.close()
 
 
 def save_guest(user_id, data):
 
     conn = get_db()
 
-    conn.execute("""
-        INSERT INTO guests
-        (
-            telegram_id,
-            full_name,
-            mother_name,
-            birth_place_date,
-            original_residence,
-            governorate,
-            hotel_name,
-            suite_number,
-            room_number,
-            stay_duration,
-            stay_reason,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        user_id,
-        data.get("full_name", ""),
-        data.get("mother_name", ""),
-        data.get("birth_place_date", ""),
-        data.get("original_residence", ""),
-        data.get("governorate", ""),
-        data.get("hotel_name", ""),
-        data.get("suite_number", ""),
-        data.get("room_number", ""),
-        data.get("stay_duration", ""),
-        data.get("stay_reason", ""),
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ))
+    try:
 
-    conn.commit()
-    conn.close()
+        conn.execute("""
+            INSERT INTO guests
+            (
+                telegram_id,
+                full_name,
+                mother_name,
+                birth_place_date,
+                original_residence,
+                governorate,
+                hotel_name,
+                suite_number,
+                room_number,
+                stay_duration,
+                stay_reason,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            data.get("full_name", ""),
+            data.get("mother_name", ""),
+            data.get("birth_place_date", ""),
+            data.get("original_residence", ""),
+            data.get("governorate", ""),
+            data.get("hotel_name", ""),
+            data.get("suite_number", ""),
+            data.get("room_number", ""),
+            data.get("stay_duration", ""),
+            data.get("stay_reason", ""),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        ))
+
+        conn.commit()
+
+    finally:
+
+        conn.close()
 
 
 # =========================================================
-# التحقق من المدير
+# التحقق من المدير والصلاحيات
 # =========================================================
 
 def is_admin(user_id):
+
     return user_id == ADMIN_ID
 
 
@@ -272,75 +318,96 @@ def cancel_keyboard():
 # /start
 # =========================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not update.message:
+        return
 
     user = update.effective_user
 
     if not user:
         return
 
-    register_user(
-        user.id,
-        user.username or ""
-    )
+    try:
 
-    context.user_data.clear()
-
-    # =====================================================
-    # المدير
-    # =====================================================
-
-    if is_admin(user.id):
-
-        set_login(user.id, True)
-
-        await update.message.reply_text(
-            "👑 أهلاً بك أيها المدير\n\n"
-            "🆔 تم التعرف على حسابك كمدير بواسطة Telegram ID.\n\n"
-            "اختر العملية المطلوبة:",
-            reply_markup=main_menu_keyboard()
+        register_user(
+            user.id,
+            user.username or ""
         )
 
-        return
+        context.user_data.clear()
 
-    # =====================================================
-    # مستخدم مسجل دخول
-    # =====================================================
+        # -------------------------------------------------
+        # المدير
+        # -------------------------------------------------
 
-    if is_logged_in(user.id):
+        if is_admin(user.id):
+
+            set_login(user.id, True)
+
+            await update.message.reply_text(
+                "👑 أهلاً بك أيها المدير\n\n"
+                "🆔 تم التعرف على حسابك كمدير بواسطة Telegram ID.\n\n"
+                "اختر العملية المطلوبة:",
+                reply_markup=main_menu_keyboard()
+            )
+
+            return
+
+        # -------------------------------------------------
+        # مستخدم مسجل دخول
+        # -------------------------------------------------
+
+        if is_logged_in(user.id):
+
+            await update.message.reply_text(
+                "👋 أهلاً بك مجدداً.\n\n"
+                "اختر العملية المطلوبة:",
+                reply_markup=main_menu_keyboard()
+            )
+
+            return
+
+        # -------------------------------------------------
+        # مستخدم غير مسجل
+        # -------------------------------------------------
 
         await update.message.reply_text(
-            "👋 أهلاً بك مجدداً.\n\n"
-            "اختر العملية المطلوبة:",
-            reply_markup=main_menu_keyboard()
+            "🌹 مرحباً بك في نظام إدارة معلومات الفنادق\n\n"
+            "📖 قال الله تعالى:\n"
+            "﴿وَقُلْ رَبِّ زِدْنِي عِلْمًا﴾\n\n"
+            "🔐 للمتابعة يجب تسجيل الدخول أولاً.",
+            reply_markup=start_keyboard()
         )
 
-        return
+    except Exception:
 
-    # =====================================================
-    # مستخدم غير مسجل
-    # =====================================================
+        logger.exception("خطأ في /start")
 
-    await update.message.reply_text(
-        "🌹 مرحباً بك في نظام إدارة معلومات الفنادق\n\n"
-        "📖 قال الله تعالى:\n"
-        "﴿وَقُلْ رَبِّ زِدْنِي عِلْمًا﴾\n\n"
-        "🔐 للمتابعة يجب تسجيل الدخول أولاً.",
-        reply_markup=start_keyboard()
-    )
+        await update.message.reply_text(
+            "❌ حدث خطأ أثناء تشغيل البوت.\n"
+            "حاول مرة أخرى."
+        )
 
 
 # =========================================================
-# زر تسجيل الدخول
+# تسجيل الدخول
 # =========================================================
 
-async def login_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def login_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
 
-    await query.answer()
-
     user = update.effective_user
+
+    if not user:
+        return
 
     # المدير لا يحتاج تسجيل دخول
     if is_admin(user.id):
@@ -356,6 +423,7 @@ async def login_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     context.user_data.clear()
+
     context.user_data["state"] = "login"
 
     await query.edit_message_text(
@@ -387,15 +455,16 @@ async def message_handler(
     state = context.user_data.get("state")
 
     # =====================================================
-    # تسجيل دخول المستخدم العادي
+    # تسجيل الدخول
     # =====================================================
 
     if state == "login":
 
-        # المدير لا يحتاج الرمز
+        # المدير
         if is_admin(user.id):
 
             set_login(user.id, True)
+
             context.user_data.clear()
 
             await update.message.reply_text(
@@ -406,6 +475,7 @@ async def message_handler(
 
             return
 
+        # الرمز الصحيح
         if text == LOGIN_PASSWORD:
 
             set_login(user.id, True)
@@ -465,6 +535,7 @@ async def message_handler(
     if state == "guest_mother":
 
         context.user_data["guest"]["mother_name"] = text
+
         context.user_data["state"] = "guest_birth"
 
         await update.message.reply_text(
@@ -480,6 +551,7 @@ async def message_handler(
     if state == "guest_birth":
 
         context.user_data["guest"]["birth_place_date"] = text
+
         context.user_data["state"] = "guest_residence"
 
         await update.message.reply_text(
@@ -495,6 +567,7 @@ async def message_handler(
     if state == "guest_residence":
 
         context.user_data["guest"]["original_residence"] = text
+
         context.user_data["state"] = "guest_governorate"
 
         await update.message.reply_text(
@@ -510,6 +583,7 @@ async def message_handler(
     if state == "guest_governorate":
 
         context.user_data["guest"]["governorate"] = text
+
         context.user_data["state"] = "guest_hotel"
 
         await update.message.reply_text(
@@ -525,6 +599,7 @@ async def message_handler(
     if state == "guest_hotel":
 
         context.user_data["guest"]["hotel_name"] = text
+
         context.user_data["state"] = "guest_suite"
 
         await update.message.reply_text(
@@ -540,6 +615,7 @@ async def message_handler(
     if state == "guest_suite":
 
         context.user_data["guest"]["suite_number"] = text
+
         context.user_data["state"] = "guest_room"
 
         await update.message.reply_text(
@@ -555,6 +631,7 @@ async def message_handler(
     if state == "guest_room":
 
         context.user_data["guest"]["room_number"] = text
+
         context.user_data["state"] = "guest_duration"
 
         await update.message.reply_text(
@@ -570,6 +647,7 @@ async def message_handler(
     if state == "guest_duration":
 
         context.user_data["guest"]["stay_duration"] = text
+
         context.user_data["state"] = "guest_reason"
 
         await update.message.reply_text(
@@ -586,12 +664,12 @@ async def message_handler(
 
         context.user_data["guest"]["stay_reason"] = text
 
+        guest = context.user_data["guest"]
+
         save_guest(
             user.id,
-            context.user_data["guest"]
+            guest
         )
-
-        guest = context.user_data["guest"]
 
         context.user_data.clear()
 
@@ -612,6 +690,15 @@ async def message_handler(
 
         return
 
+    # =====================================================
+    # لا توجد عملية
+    # =====================================================
+
+    await update.message.reply_text(
+        "ℹ️ اختر إحدى العمليات من القائمة الرئيسية.\n\n"
+        "اضغط /start للعودة."
+    )
+
 
 # =========================================================
 # معالجة الأزرار
@@ -624,6 +711,10 @@ async def callback_handler(
 
     query = update.callback_query
 
+    if not query:
+        return
+
+    # الإجابة على Callback مرة واحدة فقط
     await query.answer()
 
     user = update.effective_user
@@ -639,7 +730,10 @@ async def callback_handler(
 
     if data == "login":
 
-        await login_button(update, context)
+        await login_button(
+            update,
+            context
+        )
 
         return
 
@@ -707,11 +801,15 @@ async def callback_handler(
 
         conn = get_db()
 
-        total = conn.execute(
-            "SELECT COUNT(*) FROM guests"
-        ).fetchone()[0]
+        try:
 
-        conn.close()
+            total = conn.execute(
+                "SELECT COUNT(*) FROM guests"
+            ).fetchone()[0]
+
+        finally:
+
+            conn.close()
 
         await query.edit_message_text(
             "📊 الإحصائيات\n\n"
@@ -729,18 +827,22 @@ async def callback_handler(
 
         conn = get_db()
 
-        rows = conn.execute("""
-            SELECT
-                full_name,
-                hotel_name,
-                room_number,
-                created_at
-            FROM guests
-            ORDER BY id DESC
-            LIMIT 10
-        """).fetchall()
+        try:
 
-        conn.close()
+            rows = conn.execute("""
+                SELECT
+                    full_name,
+                    hotel_name,
+                    room_number,
+                    created_at
+                FROM guests
+                ORDER BY id DESC
+                LIMIT 10
+            """).fetchall()
+
+        finally:
+
+            conn.close()
 
         if not rows:
 
@@ -772,12 +874,13 @@ async def callback_handler(
 
     if data == "logout":
 
-        set_login(user.id, False)
+        set_login(
+            user.id,
+            False
+        )
 
         context.user_data.clear()
 
-        # المدير بعد تسجيل الخروج يعود لشاشة البداية،
-        # وعند الضغط /start سيتم التعرف عليه من ADMIN_ID
         await query.edit_message_text(
             "🚪 تم تسجيل الخروج.\n\n"
             "يمكنك الضغط على /start للعودة.",
@@ -785,6 +888,15 @@ async def callback_handler(
         )
 
         return
+
+    # =====================================================
+    # زر غير معروف
+    # =====================================================
+
+    await query.edit_message_text(
+        "❌ العملية غير معروفة.\n\n"
+        "اضغط /start للعودة."
+    )
 
 
 # =========================================================
@@ -797,9 +909,63 @@ async def error_handler(
 ):
 
     logger.error(
-        "حدث خطأ:",
+        "حدث خطأ أثناء معالجة التحديث:",
         exc_info=context.error
     )
+
+
+# =========================================================
+# HTTP SERVER لـ Render
+# =========================================================
+
+class HealthHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+
+        self.send_response(200)
+
+        self.send_header(
+            "Content-type",
+            "text/plain; charset=utf-8"
+        )
+
+        self.end_headers()
+
+        self.wfile.write(
+            b"Hotel Bot is running"
+        )
+
+    def log_message(
+        self,
+        format,
+        *args
+    ):
+
+        return
+
+
+def start_health_server():
+
+    port = int(
+        os.getenv(
+            "PORT",
+            "10000"
+        )
+    )
+
+    server = HTTPServer(
+        (
+            "0.0.0.0",
+            port
+        ),
+        HealthHandler
+    )
+
+    logger.info(
+        f"HTTP server running on port {port}"
+    )
+
+    server.serve_forever()
 
 
 # =========================================================
@@ -808,29 +974,93 @@ async def error_handler(
 
 def main():
 
+    # =====================================================
     # التحقق من BOT_TOKEN
+    # =====================================================
+
     if not BOT_TOKEN:
 
-        print("❌ BOT_TOKEN غير موجود في Environment Variables")
+        logger.error(
+            "❌ BOT_TOKEN غير موجود في Environment Variables"
+        )
+
         return
 
+    # =====================================================
     # التحقق من ADMIN_ID
+    # =====================================================
+
     if ADMIN_ID == 0:
 
-        print("❌ ADMIN_ID غير موجود أو غير صحيح")
+        logger.error(
+            "❌ ADMIN_ID غير موجود أو غير صحيح"
+        )
+
         return
 
+    # =====================================================
     # إنشاء قاعدة البيانات
-    init_db()
+    # =====================================================
 
-    # إنشاء التطبيق
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .build()
-    )
+    try:
 
-    # /start
+        init_db()
+
+        logger.info(
+            "✅ قاعدة البيانات جاهزة"
+        )
+
+    except Exception:
+
+        logger.exception(
+            "❌ خطأ أثناء إنشاء قاعدة البيانات"
+        )
+
+        return
+
+    # =====================================================
+    # تشغيل HTTP Server
+    # =====================================================
+
+    try:
+
+        health_thread = threading.Thread(
+            target=start_health_server,
+            daemon=True
+        )
+
+        health_thread.start()
+
+    except Exception:
+
+        logger.exception(
+            "❌ فشل تشغيل HTTP Server"
+        )
+
+    # =====================================================
+    # إنشاء Telegram Application
+    # =====================================================
+
+    try:
+
+        app = (
+            ApplicationBuilder()
+            .token(BOT_TOKEN)
+            .build()
+        )
+
+    except Exception:
+
+        logger.exception(
+            "❌ فشل إنشاء Telegram Application"
+        )
+
+        return
+
+    # =====================================================
+    # تسجيل Handlers
+    # =====================================================
+
     app.add_handler(
         CommandHandler(
             "start",
@@ -838,14 +1068,12 @@ def main():
         )
     )
 
-    # الأزرار
     app.add_handler(
         CallbackQueryHandler(
             callback_handler
         )
     )
 
-    # الرسائل النصية
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -853,21 +1081,46 @@ def main():
         )
     )
 
-    # الأخطاء
     app.add_error_handler(
         error_handler
     )
 
-    print("==============================")
-    print("✅ البوت يعمل بنجاح")
-    print("👑 المدير يتم التعرف عليه بواسطة ADMIN_ID")
-    print(f"🆔 ADMIN_ID = {ADMIN_ID}")
-    print("==============================")
+    # =====================================================
+    # تشغيل
+    # =====================================================
 
-    # تشغيل البوت
-    app.run_polling(
-        drop_pending_updates=True
+    logger.info(
+        "======================================"
     )
+
+    logger.info(
+        "✅ Hotel Telegram Bot Starting..."
+    )
+
+    logger.info(
+        f"👑 ADMIN_ID = {ADMIN_ID}"
+    )
+
+    logger.info(
+        "📡 Telegram Polling enabled"
+    )
+
+    logger.info(
+        "======================================"
+    )
+
+    try:
+
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES
+        )
+
+    except Exception:
+
+        logger.exception(
+            "❌ Telegram Bot توقف بسبب خطأ"
+        )
 
 
 # =========================================================
@@ -875,4 +1128,5 @@ def main():
 # =========================================================
 
 if __name__ == "__main__":
+
     main()
