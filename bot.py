@@ -3,15 +3,13 @@ import re
 import sqlite3
 import asyncio
 import threading
+
 from io import BytesIO
 from datetime import datetime, date, timedelta
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from telegram import (
-    Update,
-    BotCommand,
-)
+from telegram import Update, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -21,8 +19,8 @@ from telegram.ext import (
 )
 
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
 from reportlab.lib import colors
+from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -31,50 +29,54 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 
 
-# ============================================================
+# =========================================================
 # الإعدادات
-# ============================================================
+# =========================================================
 
 TOKEN = os.getenv("BOT_TOKEN")
 
 DATABASE_FILE = "hotel_reports.db"
 
-IMAGE_FILE = "images.png"
-
 PAGE_WIDTH, PAGE_HEIGHT = A4
 
 # الوضع الافتراضي:
-# all    = جميع النزلاء في ملف واحد
-# single = كل نزيل في ملف مستقل
-PDF_MODE = "all"
+# single = كل نزيل في ملف
+# all = جميع النزلاء في ملف واحد
+DEFAULT_MODE = "single"
 
 
-# ============================================================
+# =========================================================
 # البحث عن الخط العربي
-# ============================================================
+# =========================================================
 
 def find_arabic_font():
 
     fonts = [
+
+        # DejaVu
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+
         "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
 
+        # Noto
         "/usr/share/fonts/opentype/noto/NotoSansArabic-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
 
-        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
 
+        # Liberation
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
     ]
 
-    for font in fonts:
-        if os.path.exists(font):
-            return font
+    for font_path in fonts:
+
+        if os.path.exists(font_path):
+            return font_path
 
     return None
 
 
 ARABIC_FONT_PATH = find_arabic_font()
+
 
 if ARABIC_FONT_PATH:
 
@@ -112,9 +114,9 @@ else:
     PDF_FONT = "Helvetica"
 
 
-# ============================================================
+# =========================================================
 # معالجة النص العربي
-# ============================================================
+# =========================================================
 
 def arabic_text(text):
 
@@ -125,49 +127,18 @@ def arabic_text(text):
 
     try:
 
-        reshaped = arabic_reshaper.reshape(
-            text
-        )
+        reshaped = arabic_reshaper.reshape(text)
 
-        return get_display(
-            reshaped
-        )
+        return get_display(reshaped)
 
     except Exception:
 
         return text
 
 
-# ============================================================
-# اسم ملف آمن
-# ============================================================
-
-def safe_filename(name):
-
-    if not name:
-        name = "تقرير_نزيل"
-
-    name = re.sub(
-        r'[\\/:*?"<>|]',
-        "",
-        str(name)
-    )
-
-    name = re.sub(
-        r"\s+",
-        "_",
-        name.strip()
-    )
-
-    if not name:
-        name = "تقرير_نزيل"
-
-    return name + ".pdf"
-
-
-# ============================================================
+# =========================================================
 # قاعدة البيانات
-# ============================================================
+# =========================================================
 
 def get_db():
 
@@ -194,24 +165,33 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
 
             guest_name TEXT,
+
             mother_name TEXT,
+
             birth TEXT,
+
             home TEXT,
 
             governorate TEXT,
+
             hotel TEXT,
 
             suite TEXT,
+
             room TEXT,
 
             checkin_date TEXT,
+
             duration TEXT,
+
             reason TEXT,
 
             record_date TEXT,
+
             record_time TEXT,
 
             telegram_user_id TEXT,
+
             telegram_username TEXT
 
         )
@@ -227,9 +207,9 @@ def init_database():
     )
 
 
-# ============================================================
-# حفظ نزيل
-# ============================================================
+# =========================================================
+# حفظ النزيل
+# =========================================================
 
 def save_guest(
     guest,
@@ -265,33 +245,21 @@ def save_guest(
             mother_name,
             birth,
             home,
-
             governorate,
             hotel,
-
             suite,
             room,
-
             checkin_date,
             duration,
             reason,
-
             record_date,
             record_time,
-
             telegram_user_id,
             telegram_username
 
         )
 
-        VALUES (
-            ?, ?, ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?, ?,
-            ?, ?,
-            ?, ?
-        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
 
         (
@@ -373,11 +341,13 @@ def save_guest(
     return guest_id
 
 
-# ============================================================
-# جلب بيانات اليوم
-# ============================================================
+# =========================================================
+# الحصول على بيانات يوم
+# =========================================================
 
-def get_guests_by_date(target_date):
+def get_guests_by_date(
+    target_date
+):
 
     connection = get_db()
 
@@ -403,11 +373,13 @@ def get_guests_by_date(target_date):
     return rows
 
 
-# ============================================================
-# جلب بيانات الشهر
-# ============================================================
+# =========================================================
+# الحصول على بيانات شهر
+# =========================================================
 
-def get_guests_by_month(year_month):
+def get_guests_by_month(
+    year_month
+):
 
     connection = get_db()
 
@@ -433,9 +405,36 @@ def get_guests_by_month(year_month):
     return rows
 
 
-# ============================================================
+# =========================================================
+# تنظيف اسم الملف
+# =========================================================
+
+def safe_filename(name):
+
+    if not name:
+        name = "تقرير_نزيل"
+
+    name = re.sub(
+        r'[\\/:*?"<>|]',
+        "",
+        name
+    )
+
+    name = re.sub(
+        r"\s+",
+        "_",
+        name.strip()
+    )
+
+    if not name:
+        name = "تقرير_نزيل"
+
+    return name + ".pdf"
+
+
+# =========================================================
 # استخراج قيمة من النص
-# ============================================================
+# =========================================================
 
 def extract_value(
     text,
@@ -449,7 +448,6 @@ def extract_value(
             rf"{re.escape(field)}\s*[:：]\s*(.+)",
 
             rf"{re.escape(field)}\s*[-–]\s*(.+)",
-
         ]
 
         for pattern in patterns:
@@ -465,15 +463,14 @@ def extract_value(
                 value = match.group(1).strip()
 
                 if value:
-
                     return value
 
     return "غير مذكور"
 
 
-# ============================================================
-# تحليل بيانات النزيل
-# ============================================================
+# =========================================================
+# استخراج بيانات النزيل
+# =========================================================
 
 def parse_guest(text):
 
@@ -546,39 +543,38 @@ def parse_guest(text):
     return result
 
 
-# ============================================================
-# تقسيم عدة نزلاء داخل رسالة واحدة
-# ============================================================
+# =========================================================
+# تقسيم عدة نزلاء
+# =========================================================
 
 def split_guests(text):
 
-    # يسمح بفصل النزلاء بواسطة:
+    # يمكن فصل النزلاء باستخدام:
     #
-    # ====================
+    # =====
+    # -----
+    # *****
     #
-    # --------------------
-    #
-    # ********************
-    #
-    # أو كلمة نزيل / النزيل
-
     parts = re.split(
         r"\n\s*(?:={3,}|-{3,}|\*{3,})\s*\n",
         text
     )
 
-    parts = [
-        part.strip()
-        for part in parts
-        if part.strip()
-    ]
+    result = []
 
-    return parts
+    for part in parts:
+
+        part = part.strip()
+
+        if part:
+            result.append(part)
+
+    return result
 
 
-# ============================================================
+# =========================================================
 # خادم Render
-# ============================================================
+# =========================================================
 
 class HealthHandler(
     BaseHTTPRequestHandler
@@ -598,7 +594,9 @@ class HealthHandler(
         self.end_headers()
 
         self.wfile.write(
-            b"Hotel Report Bot is running"
+            "Hotel Report Bot is running".encode(
+                "utf-8"
+            )
         )
 
     def log_message(
@@ -634,11 +632,349 @@ def run_web_server():
     server.serve_forever()
 
 
-# ============================================================
-# تحميل صورة Telegram
-# ============================================================
+# =========================================================
+# رسم عنوان PDF
+# =========================================================
 
-async def get_photo(update):
+def draw_pdf_header(
+    pdf,
+    title
+):
+
+    pdf.setFillColor(
+        colors.HexColor("#17365D")
+    )
+
+    pdf.rect(
+        0,
+        PAGE_HEIGHT - 90,
+        PAGE_WIDTH,
+        90,
+        fill=1,
+        stroke=0
+    )
+
+    pdf.setFillColor(
+        colors.white
+    )
+
+    pdf.setFont(
+        PDF_FONT,
+        18
+    )
+
+    pdf.drawRightString(
+        PAGE_WIDTH - 45,
+        PAGE_HEIGHT - 45,
+        arabic_text(title)
+    )
+
+    pdf.setFillColor(
+        colors.black
+    )
+
+
+# =========================================================
+# رسم حقل في PDF
+# =========================================================
+
+def draw_field(
+    pdf,
+    y,
+    key,
+    value
+):
+
+    pdf.setFillColor(
+        colors.HexColor("#F2F4F7")
+    )
+
+    pdf.roundRect(
+        45,
+        y - 22,
+        PAGE_WIDTH - 90,
+        28,
+        5,
+        fill=1,
+        stroke=0
+    )
+
+    pdf.setFillColor(
+        colors.black
+    )
+
+    pdf.setFont(
+        PDF_FONT,
+        10
+    )
+
+    line = f"{key}: {value}"
+
+    pdf.drawRightString(
+        PAGE_WIDTH - 60,
+        y - 13,
+        arabic_text(line)
+    )
+
+    return y - 38
+
+
+# =========================================================
+# إنشاء PDF لنزيل واحد
+# =========================================================
+
+def create_guest_pdf(
+    guest,
+    image_data=None
+):
+
+    buffer = BytesIO()
+
+    pdf = canvas.Canvas(
+        buffer,
+        pagesize=A4
+    )
+
+    # العنوان
+    draw_pdf_header(
+        pdf,
+        "مكتب أمن الفنادق والعقارات"
+    )
+
+    y = PAGE_HEIGHT - 125
+
+    pdf.setFont(
+        PDF_FONT,
+        15
+    )
+
+    pdf.drawRightString(
+        PAGE_WIDTH - 50,
+        y,
+        arabic_text(
+            "تقرير نزيل فندق"
+        )
+    )
+
+    y -= 40
+
+    # بيانات النزيل
+    for key, value in guest.items():
+
+        if y < 100:
+
+            pdf.showPage()
+
+            draw_pdf_header(
+                pdf,
+                "تقرير نزيل فندق"
+            )
+
+            y = PAGE_HEIGHT - 125
+
+        y = draw_field(
+            pdf,
+            y,
+            key,
+            value
+        )
+
+    # الصورة
+    if image_data:
+
+        try:
+
+            image_data.seek(0)
+
+            image = ImageReader(
+                image_data
+            )
+
+            img_width = 300
+
+            img_height = 220
+
+            if y < img_height + 70:
+
+                pdf.showPage()
+
+                draw_pdf_header(
+                    pdf,
+                    "صورة النزيل"
+                )
+
+                y = PAGE_HEIGHT - 125
+
+            pdf.drawImage(
+                image,
+                50,
+                y - img_height,
+                width=img_width,
+                height=img_height,
+                preserveAspectRatio=True,
+                anchor="sw",
+                mask="auto"
+            )
+
+        except Exception as e:
+
+            print(
+                "Image error:",
+                e
+            )
+
+    # التاريخ
+    pdf.setFont(
+        PDF_FONT,
+        8
+    )
+
+    pdf.setFillColor(
+        colors.grey
+    )
+
+    pdf.drawString(
+        45,
+        30,
+        arabic_text(
+            "تم إنشاء التقرير آلياً بواسطة بوت تقارير الفنادق"
+        )
+    )
+
+    pdf.save()
+
+    buffer.seek(0)
+
+    return buffer
+
+
+# =========================================================
+# PDF لجميع النزلاء في ملف واحد
+# =========================================================
+
+def create_all_guests_pdf(
+    guests,
+    image_data=None,
+    title="تقرير نزلاء الفنادق"
+):
+
+    buffer = BytesIO()
+
+    pdf = canvas.Canvas(
+        buffer,
+        pagesize=A4
+    )
+
+    total = len(guests)
+
+    for index, guest in enumerate(
+        guests,
+        start=1
+    ):
+
+        if index > 1:
+            pdf.showPage()
+
+        draw_pdf_header(
+            pdf,
+            title
+        )
+
+        y = PAGE_HEIGHT - 120
+
+        pdf.setFont(
+            PDF_FONT,
+            13
+        )
+
+        pdf.drawRightString(
+            PAGE_WIDTH - 50,
+            y,
+            arabic_text(
+                f"النزيل رقم {index} من {total}"
+            )
+        )
+
+        y -= 35
+
+        for key, value in guest.items():
+
+            if y < 100:
+
+                pdf.showPage()
+
+                draw_pdf_header(
+                    pdf,
+                    title
+                )
+
+                y = PAGE_HEIGHT - 125
+
+            y = draw_field(
+                pdf,
+                y,
+                key,
+                value
+            )
+
+        # الصورة
+        if image_data:
+
+            try:
+
+                image_data.seek(0)
+
+                image = ImageReader(
+                    image_data
+                )
+
+                img_width = 300
+
+                img_height = 220
+
+                if y < img_height + 70:
+
+                    pdf.showPage()
+
+                    draw_pdf_header(
+                        pdf,
+                        "صورة النزيل"
+                    )
+
+                    y = PAGE_HEIGHT - 125
+
+                pdf.drawImage(
+                    image,
+                    50,
+                    y - img_height,
+                    width=img_width,
+                    height=img_height,
+                    preserveAspectRatio=True,
+                    anchor="sw",
+                    mask="auto"
+                )
+
+            except Exception as e:
+
+                print(
+                    "Image error:",
+                    e
+                )
+
+    pdf.save()
+
+    buffer.seek(0)
+
+    return buffer
+
+
+# =========================================================
+# تحميل صورة Telegram
+# =========================================================
+
+async def get_photo(
+    update
+):
 
     message = update.message
 
@@ -652,9 +988,7 @@ async def get_photo(update):
 
         photo = message.photo[-1]
 
-        telegram_file = (
-            await photo.get_file()
-        )
+        telegram_file = await photo.get_file()
 
         image_buffer = BytesIO()
 
@@ -676,1046 +1010,186 @@ async def get_photo(update):
         return None
 
 
-# ============================================================
-# رسم عنوان PDF
-# ============================================================
+# =========================================================
+# قائمة أوامر Telegram
+# =========================================================
 
-def draw_pdf_header(
-    pdf,
-    title
+async def set_bot_commands(
+    application
 ):
 
-    pdf.setFont(
-        PDF_FONT,
-        18
-    )
+    commands = [
 
-    pdf.drawRightString(
-        PAGE_WIDTH - 45,
-        PAGE_HEIGHT - 45,
-        arabic_text(
-            "مكتب معلومات الفنادق"
-        )
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        15
-    )
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 45,
-        PAGE_HEIGHT - 78,
-        arabic_text(
-            title
-        )
-    )
-
-    pdf.setStrokeColor(
-        colors.grey
-    )
-
-    pdf.line(
-        45,
-        PAGE_HEIGHT - 95,
-        PAGE_WIDTH - 45,
-        PAGE_HEIGHT - 95
-    )
-
-
-# ============================================================
-# إنشاء PDF لنزيل واحد
-# ============================================================
-
-def create_guest_pdf(
-    guest,
-    image_data=None
-):
-
-    buffer = BytesIO()
-
-    pdf = canvas.Canvas(
-        buffer,
-        pagesize=A4
-    )
-
-    draw_pdf_header(
-        pdf,
-        "تقرير نزيل فندق"
-    )
-
-    y = PAGE_HEIGHT - 125
-
-    fields = [
-
-        (
-            "الاسم الثلاثي",
-            guest.get(
-                "الاسم الثلاثي",
-                "غير مذكور"
-            )
+        BotCommand(
+            "start",
+            "🏠 بدء استخدام البوت"
         ),
 
-        (
-            "اسم الأم",
-            guest.get(
-                "اسم الأم",
-                "غير مذكور"
-            )
+        BotCommand(
+            "daily",
+            "📊 التقرير اليومي"
         ),
 
-        (
-            "مكان وتاريخ الولادة",
-            guest.get(
-                "مكان وتاريخ الولادة",
-                "غير مذكور"
-            )
+        BotCommand(
+            "yesterday",
+            "📅 تقرير أمس"
         ),
 
-        (
-            "السكن الأصلي",
-            guest.get(
-                "السكن الأصلي",
-                "غير مذكور"
-            )
+        BotCommand(
+            "monthly",
+            "📈 التقرير الشهري"
         ),
 
-        (
-            "المحافظة",
-            guest.get(
-                "المحافظة",
-                "غير مذكور"
-            )
+        BotCommand(
+            "single",
+            "📄 كل نزيل في ملف PDF"
         ),
 
-        (
-            "اسم الفندق",
-            guest.get(
-                "اسم الفندق",
-                "غير مذكور"
-            )
+        BotCommand(
+            "all",
+            "📚 جميع النزلاء في ملف PDF واحد"
         ),
 
-        (
-            "رقم الجناح",
-            guest.get(
-                "رقم الجناح",
-                "غير مذكور"
-            )
-        ),
-
-        (
-            "رقم الغرفة",
-            guest.get(
-                "رقم الغرفة",
-                "غير مذكور"
-            )
-        ),
-
-        (
-            "تاريخ النزول",
-            guest.get(
-                "تاريخ النزول",
-                "غير مذكور"
-            )
-        ),
-
-        (
-            "مدة الإقامة",
-            guest.get(
-                "مدة الإقامة",
-                "غير مذكور"
-            )
-        ),
-
-        (
-            "سبب الإقامة",
-            guest.get(
-                "سبب الإقامة",
-                "غير مذكور"
-            )
+        BotCommand(
+            "cancel",
+            "❌ إلغاء"
         ),
     ]
 
-    for key, value in fields:
-
-        if y < 100:
-
-            pdf.showPage()
-
-            draw_pdf_header(
-                pdf,
-                "تقرير نزيل فندق"
-            )
-
-            y = PAGE_HEIGHT - 125
-
-        # صندوق الحقل
-
-        pdf.setStrokeColor(
-            colors.lightgrey
-        )
-
-        pdf.roundRect(
-            45,
-            y - 25,
-            PAGE_WIDTH - 90,
-            32,
-            5,
-            stroke=1,
-            fill=0
-        )
-
-        pdf.setFont(
-            PDF_FONT,
-            10
-        )
-
-        pdf.drawRightString(
-            PAGE_WIDTH - 60,
-            y - 14,
-            arabic_text(
-                f"{key}: {value}"
-            )
-        )
-
-        y -= 43
-
-    # --------------------------------------------------------
-    # الصورة
-    # --------------------------------------------------------
-
-    if image_data:
-
-        try:
-
-            image_data.seek(0)
-
-            image = ImageReader(
-                image_data
-            )
-
-            img_width = 240
-            img_height = 180
-
-            if y < 230:
-
-                pdf.showPage()
-
-                draw_pdf_header(
-                    pdf,
-                    "صورة النزيل"
-                )
-
-                y = PAGE_HEIGHT - 125
-
-            pdf.drawImage(
-                image,
-                55,
-                y - img_height,
-                width=img_width,
-                height=img_height,
-                preserveAspectRatio=True,
-                anchor="sw"
-            )
-
-        except Exception as e:
-
-            print(
-                "Image error:",
-                e
-            )
-
-    pdf.save()
-
-    buffer.seek(0)
-
-    return buffer
-
-
-# ============================================================
-# PDF لجميع النزلاء في ملف واحد
-# ============================================================
-
-def create_all_guests_pdf(
-    guests,
-    image_data=None
-):
-
-    buffer = BytesIO()
-
-    pdf = canvas.Canvas(
-        buffer,
-        pagesize=A4
+    await application.bot.set_my_commands(
+        commands
     )
 
-    total = len(guests)
-
-    # --------------------------------------------------------
-    # الغلاف
-    # --------------------------------------------------------
-
-    pdf.setFont(
-        PDF_FONT,
-        22
+    print(
+        "Telegram commands registered successfully"
     )
 
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 100,
-        arabic_text(
-            "مكتب معلومات الفنادق"
-        )
-    )
 
-    pdf.setFont(
-        PDF_FONT,
-        18
-    )
-
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 145,
-        arabic_text(
-            "تقرير بيانات النزلاء"
-        )
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        13
-    )
-
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 185,
-        arabic_text(
-            f"عدد النزلاء: {total}"
-        )
-    )
-
-    pdf.setFont(
-        PDF_FONT,
-        11
-    )
-
-    pdf.drawCentredString(
-        PAGE_WIDTH / 2,
-        PAGE_HEIGHT - 215,
-        arabic_text(
-            f"تاريخ التقرير: {date.today().isoformat()}"
-        )
-    )
-
-    pdf.setStrokeColor(
-        colors.grey
-    )
-
-    pdf.line(
-        60,
-        PAGE_HEIGHT - 240,
-        PAGE_WIDTH - 60,
-        PAGE_HEIGHT - 240
-    )
-
-    # --------------------------------------------------------
-    # كل نزيل في قسم
-    # --------------------------------------------------------
-
-    for index, guest in enumerate(guests, start=1):
-
-        pdf.showPage()
-
-        draw_pdf_header(
-            pdf,
-            f"بيانات النزيل رقم {index}"
-        )
-
-        y = PAGE_HEIGHT - 125
-
-        fields = [
-
-            (
-                "الاسم الثلاثي",
-                guest.get(
-                    "الاسم الثلاثي",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "اسم الأم",
-                guest.get(
-                    "اسم الأم",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "مكان وتاريخ الولادة",
-                guest.get(
-                    "مكان وتاريخ الولادة",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "السكن الأصلي",
-                guest.get(
-                    "السكن الأصلي",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "المحافظة",
-                guest.get(
-                    "المحافظة",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "اسم الفندق",
-                guest.get(
-                    "اسم الفندق",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "رقم الجناح",
-                guest.get(
-                    "رقم الجناح",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "رقم الغرفة",
-                guest.get(
-                    "رقم الغرفة",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "تاريخ النزول",
-                guest.get(
-                    "تاريخ النزول",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "مدة الإقامة",
-                guest.get(
-                    "مدة الإقامة",
-                    "غير مذكور"
-                )
-            ),
-
-            (
-                "سبب الإقامة",
-                guest.get(
-                    "سبب الإقامة",
-                    "غير مذكور"
-                )
-            ),
-        ]
-
-        for key, value in fields:
-
-            pdf.setStrokeColor(
-                colors.lightgrey
-            )
-
-            pdf.roundRect(
-                45,
-                y - 25,
-                PAGE_WIDTH - 90,
-                32,
-                5,
-                stroke=1,
-                fill=0
-            )
-
-            pdf.setFont(
-                PDF_FONT,
-                10
-            )
-
-            pdf.drawRightString(
-                PAGE_WIDTH - 60,
-                y - 14,
-                arabic_text(
-                    f"{key}: {value}"
-                )
-            )
-
-            y -= 43
-
-        # الصورة المرتبطة بالرسالة
-        if image_data:
-
-            try:
-
-                image_data.seek(0)
-
-                image = ImageReader(
-                    image_data
-                )
-
-                img_width = 220
-                img_height = 165
-
-                if y < 220:
-
-                    pdf.showPage()
-
-                    draw_pdf_header(
-                        pdf,
-                        f"صورة النزيل رقم {index}"
-                    )
-
-                    y = PAGE_HEIGHT - 125
-
-                pdf.drawImage(
-                    image,
-                    55,
-                    y - img_height,
-                    width=img_width,
-                    height=img_height,
-                    preserveAspectRatio=True,
-                    anchor="sw"
-                )
-
-            except Exception as e:
-
-                print(
-                    "Image error:",
-                    e
-                )
-
-    pdf.save()
-
-    buffer.seek(0)
-
-    return buffer
-
-
-# ============================================================
-# التقرير اليومي PDF
-# ============================================================
-
-def create_daily_pdf(
-    rows,
-    target_date,
-    title="تقرير عمل قسم معلومات الفنادق"
-):
-
-    buffer = BytesIO()
-
-    pdf = canvas.Canvas(
-        buffer,
-        pagesize=A4
-    )
-
-    y = PAGE_HEIGHT - 50
-
-    pdf.setFont(
-        PDF_FONT,
-        20
-    )
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 45,
-        y,
-        arabic_text(
-            title
-        )
-    )
-
-    y -= 35
-
-    pdf.setFont(
-        PDF_FONT,
-        12
-    )
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 45,
-        y,
-        arabic_text(
-            f"التاريخ: {target_date}"
-        )
-    )
-
-    y -= 45
-
-    total = len(rows)
-
-    governorates = Counter(
-        row["governorate"]
-        for row in rows
-    )
-
-    hotels = Counter(
-        row["hotel"]
-        for row in rows
-    )
-
-    reasons = Counter(
-        row["reason"]
-        for row in rows
-    )
-
-    suites = Counter(
-        row["suite"]
-        for row in rows
-        if row["suite"]
-        and row["suite"] != "غير مذكور"
-    )
-
-    rooms = Counter(
-        row["room"]
-        for row in rows
-        if row["room"]
-        and row["room"] != "غير مذكور"
-    )
-
-    # --------------------------------------------------------
-    # دالة الأقسام
-    # --------------------------------------------------------
-
-    def section(
-        title,
-        counter
-    ):
-
-        nonlocal y
-
-        if y < 100:
-
-            pdf.showPage()
-
-            y = PAGE_HEIGHT - 50
-
-        pdf.setFont(
-            PDF_FONT,
-            14
-        )
-
-        pdf.drawRightString(
-            PAGE_WIDTH - 45,
-            y,
-            arabic_text(
-                title
-            )
-        )
-
-        y -= 25
-
-        pdf.setFont(
-            PDF_FONT,
-            10
-        )
-
-        for name, count in counter.most_common():
-
-            if y < 60:
-
-                pdf.showPage()
-
-                y = PAGE_HEIGHT - 50
-
-                pdf.setFont(
-                    PDF_FONT,
-                    10
-                )
-
-            pdf.drawRightString(
-                PAGE_WIDTH - 60,
-                y,
-                arabic_text(
-                    f"{name}: {count}"
-                )
-            )
-
-            y -= 20
-
-        y -= 15
-
-    # --------------------------------------------------------
-    # الإجمالي
-    # --------------------------------------------------------
-
-    pdf.setFont(
-        PDF_FONT,
-        15
-    )
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 45,
-        y,
-        arabic_text(
-            f"إجمالي النزلاء: {total}"
-        )
-    )
-
-    y -= 40
-
-    section(
-        "أولاً: التوزيع حسب المحافظة",
-        governorates
-    )
-
-    section(
-        "ثانياً: توزيع النزلاء على الفنادق",
-        hotels
-    )
-
-    section(
-        "ثالثاً: أسباب الإقامة",
-        reasons
-    )
-
-    section(
-        "رابعاً: أرقام الغرف",
-        rooms
-    )
-
-    section(
-        "خامساً: أرقام الأجنحة",
-        suites
-    )
-
-    # --------------------------------------------------------
-    # التحليل السردي
-    # --------------------------------------------------------
-
-    if y < 180:
-
-        pdf.showPage()
-
-        y = PAGE_HEIGHT - 50
-
-    pdf.setFont(
-        PDF_FONT,
-        15
-    )
-
-    pdf.drawRightString(
-        PAGE_WIDTH - 45,
-        y,
-        arabic_text(
-            "سادساً: التحليل والسرد"
-        )
-    )
-
-    y -= 30
-
-    top_gov = (
-        governorates.most_common(1)[0]
-        if governorates
-        else ("غير متوفر", 0)
-    )
-
-    top_hotel = (
-        hotels.most_common(1)[0]
-        if hotels
-        else ("غير متوفر", 0)
-    )
-
-    top_reason = (
-        reasons.most_common(1)[0]
-        if reasons
-        else ("غير متوفر", 0)
-    )
-
-    paragraphs = [
-
-        f"بلغ إجمالي عدد النزلاء الذين تم تسجيل بياناتهم خلال يوم {target_date} عدد {total} نزيلاً.",
-
-        f"وبحسب التوزيع الجغرافي، جاءت محافظة {top_gov[0]} في المرتبة الأولى بعدد {top_gov[1]} نزلاء.",
-
-        f"أما على مستوى الفنادق، فقد سجل فندق {top_hotel[0]} العدد الأكبر من النزلاء بواقع {top_hotel[1]} نزلاء.",
-
-        f"وكان سبب الإقامة الأكثر تكراراً هو {top_reason[0]} بعدد {top_reason[1]} نزلاء.",
-
-        "وتوضح البيانات المسجلة خلال اليوم حركة النزلاء وتوزعهم على المحافظات والفنادق وأسباب الإقامة، بما يساعد على تنظيم البيانات وإعداد المتابعة اليومية لقسم معلومات الفنادق."
-    ]
-
-    pdf.setFont(
-        PDF_FONT,
-        10
-    )
-
-    for paragraph in paragraphs:
-
-        # تقسيم الفقرة إلى أسطر
-        words = paragraph.split()
-
-        current = ""
-
-        lines = []
-
-        for word in words:
-
-            test = (
-                current + " " + word
-            ).strip()
-
-            if len(test) > 80:
-
-                if current:
-                    lines.append(
-                        current
-                    )
-
-                current = word
-
-            else:
-
-                current = test
-
-        if current:
-
-            lines.append(
-                current
-            )
-
-        for line in lines:
-
-            if y < 60:
-
-                pdf.showPage()
-
-                y = PAGE_HEIGHT - 50
-
-                pdf.setFont(
-                    PDF_FONT,
-                    10
-                )
-
-            pdf.drawRightString(
-                PAGE_WIDTH - 45,
-                y,
-                arabic_text(
-                    line
-                )
-            )
-
-            y -= 20
-
-        y -= 10
-
-    pdf.save()
-
-    buffer.seek(0)
-
-    return buffer
-
-
-# ============================================================
-# رسالة الترحيب
-# ============================================================
+# =========================================================
+# START
+# =========================================================
 
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    welcome = (
+    context.user_data["pdf_mode"] = DEFAULT_MODE
+
+    await update.message.reply_text(
+
         "السلام عليكم ورحمة الله وبركاته 🌹\n\n"
 
         "أهلاً وسهلاً ومرحباً بك في\n"
-        "🏨 قسم معلومات الفنادق\n\n"
 
-        "يسعدنا خدمتك، وقد تم تجهيز هذا البوت "
-        "لتسهيل تسجيل بيانات النزلاء وإعداد التقارير "
-        "بشكل منظم وسريع.\n\n"
+        "🏨 قسم معلومات الفنادق 🏨\n\n"
 
-        "📋 يمكنك تحويل رسالة النزيل من المجموعة "
-        "إلى البوت، سواء كانت تحتوي على نص فقط "
-        "أو نصاً مع صورة.\n\n"
+        "يسعدنا خدمتك، وتم تجهيز هذا البوت "
+        "لتسهيل تنظيم وتوثيق بيانات النزلاء "
+        "وإعداد التقارير اليومية والشهرية.\n\n"
 
-        "سيقوم البوت تلقائياً بـ:\n"
-        "✅ استخراج بيانات النزيل\n"
-        "✅ حفظ البيانات في قاعدة البيانات\n"
-        "✅ إنشاء ملف PDF منسق\n"
-        "✅ تسمية الملف باسم النزيل\n"
-        "✅ إدراج الصورة ضمن التقرير عند وجودها\n"
-        "✅ إعداد التقارير اليومية والشهرية\n\n"
+        "📋 طريقة العمل:\n"
 
-        "📌 طريقة العمل:\n"
-        "1️⃣ حوّل رسالة النزيل إلى البوت.\n"
-        "2️⃣ انتظر معالجة البيانات.\n"
-        "3️⃣ سيصلك ملف PDF جاهز.\n\n"
+        "1️⃣ قم بتحويل رسالة النزيل من المجموعة إلى البوت.\n"
 
-        "📊 ويمكنك استخدام الأوامر من القائمة "
-        "بالضغط على زر / أسفل المحادثة.\n\n"
+        "2️⃣ يمكن أن تحتوي الرسالة على البيانات والصورة.\n"
 
-        "مع تمنياتنا لكم بالتوفيق والنجاح 🌷"
-    )
+        "3️⃣ سيقوم البوت باستخراج البيانات تلقائياً.\n"
 
-    # --------------------------------------------------------
-    # إرسال الصورة إذا كانت موجودة
-    # --------------------------------------------------------
+        "4️⃣ سيتم حفظ البيانات في قاعدة البيانات.\n"
 
-    if os.path.exists(IMAGE_FILE):
+        "5️⃣ سيتم إنشاء ملف PDF مرتب.\n\n"
 
-        try:
+        "📄 وضع الملفات الحالي:\n"
 
-            with open(
-                IMAGE_FILE,
-                "rb"
-            ) as photo:
+        "• /single → كل نزيل في ملف PDF مستقل.\n"
 
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=welcome
-                )
+        "• /all → جميع النزلاء في ملف PDF واحد.\n\n"
 
-            return
+        "📊 التقارير:\n"
 
-        except Exception as e:
+        "• /daily → التقرير اليومي.\n"
 
-            print(
-                "Welcome image error:",
-                e
-            )
+        "• /yesterday → تقرير أمس.\n"
 
-    await update.message.reply_text(
-        welcome
+        "• /monthly → التقرير الشهري.\n\n"
+
+        "💡 اكتب / في أي وقت لعرض قائمة الأوامر.\n\n"
+
+        "🤝 أهلاً بك، ونتمنى لك التوفيق."
     )
 
 
-# ============================================================
-# أمر المساعدة
-# ============================================================
+# =========================================================
+# وضع ملف مستقل
+# =========================================================
 
-async def help_command(
+async def single_mode(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    text = (
-        "📋 أوامر بوت قسم معلومات الفنادق\n\n"
-
-        "/start\n"
-        "رسالة الترحيب وشرح طريقة العمل.\n\n"
-
-        "/daily\n"
-        "إنشاء التقرير اليومي.\n\n"
-
-        "/yesterday\n"
-        "إنشاء تقرير أمس.\n\n"
-
-        "/monthly\n"
-        "إنشاء التقرير الشهري.\n\n"
-
-        "/mode\n"
-        "اختيار طريقة ملفات PDF.\n\n"
-
-        "/all\n"
-        "إرسال جميع النزلاء في ملف PDF واحد.\n\n"
-
-        "/single\n"
-        "إرسال كل نزيل في ملف PDF مستقل.\n\n"
-
-        "/help\n"
-        "عرض هذه القائمة."
-    )
+    context.user_data["pdf_mode"] = "single"
 
     await update.message.reply_text(
-        text
+
+        "📄 تم اختيار وضع الملفات المستقلة.\n\n"
+
+        "كل نزيل سيتم إرساله في ملف PDF مستقل "
+        "وباسم النزيل.\n\n"
+
+        "الآن قم بتحويل رسالة النزلاء إلى البوت."
     )
 
 
-# ============================================================
-# اختيار وضع PDF
-# ============================================================
-
-async def mode_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    global PDF_MODE
-
-    if PDF_MODE == "all":
-
-        current = (
-            "📚 الوضع الحالي:\n"
-            "جميع النزلاء في ملف PDF واحد."
-        )
-
-    else:
-
-        current = (
-            "📄 الوضع الحالي:\n"
-            "كل نزيل في ملف PDF مستقل."
-        )
-
-    text = (
-        f"{current}\n\n"
-
-        "لتغيير الوضع:\n\n"
-
-        "/all\n"
-        "جميع النزلاء في ملف واحد.\n\n"
-
-        "/single\n"
-        "كل نزيل في ملف مستقل."
-    )
-
-    await update.message.reply_text(
-        text
-    )
-
-
-# ============================================================
+# =========================================================
 # وضع ملف واحد
-# ============================================================
+# =========================================================
 
-async def all_command(
+async def all_mode(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    global PDF_MODE
-
-    PDF_MODE = "all"
+    context.user_data["pdf_mode"] = "all"
 
     await update.message.reply_text(
-        "✅ تم اختيار وضع:\n\n"
-        "📚 جميع النزلاء في ملف PDF واحد."
+
+        "📚 تم اختيار وضع الملف الموحد.\n\n"
+
+        "سيتم جمع جميع النزلاء الموجودين في "
+        "الرسالة المحولة داخل ملف PDF واحد.\n\n"
+
+        "الآن قم بتحويل رسالة النزلاء إلى البوت."
     )
 
 
-# ============================================================
-# وضع ملفات منفصلة
-# ============================================================
+# =========================================================
+# إلغاء
+# =========================================================
 
-async def single_command(
+async def cancel(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    global PDF_MODE
+    context.user_data.clear()
 
-    PDF_MODE = "single"
+    context.user_data["pdf_mode"] = DEFAULT_MODE
 
     await update.message.reply_text(
-        "✅ تم اختيار وضع:\n\n"
-        "📄 كل نزيل في ملف PDF مستقل."
+
+        "❌ تم إلغاء العملية.\n\n"
+
+        "يمكنك البدء من جديد باستخدام:\n"
+
+        "/start"
     )
 
 
-# ============================================================
+# =========================================================
 # معالجة رسالة النزيل
-# ============================================================
+# =========================================================
 
 async def process_message(
     update: Update,
@@ -1727,48 +1201,73 @@ async def process_message(
     if not message:
         return
 
-    # --------------------------------------------------------
+    # -----------------------------------------------------
     # النص أو Caption
-    # --------------------------------------------------------
+    # -----------------------------------------------------
 
     text = (
+
         message.text
+
         if message.text
+
         else message.caption
+
         if message.caption
+
         else ""
     )
 
     if not text.strip():
 
         await message.reply_text(
-            "❌ لم أجد بيانات نصية في الرسالة.\n\n"
-            "يرجى تحويل رسالة تحتوي على بيانات النزيل."
+
+            "❌ لم أجد بيانات نصية.\n\n"
+
+            "قم بتحويل الرسالة التي تحتوي "
+            "على بيانات النزيل إلى البوت."
         )
 
         return
 
-    # --------------------------------------------------------
+    # -----------------------------------------------------
     # تقسيم النزلاء
-    # --------------------------------------------------------
+    # -----------------------------------------------------
 
     guests_text = split_guests(
         text
     )
 
-    guests = []
+    if not guests_text:
 
-    # --------------------------------------------------------
+        await message.reply_text(
+            "❌ لم أتمكن من استخراج بيانات النزلاء."
+        )
+
+        return
+
+    # -----------------------------------------------------
     # الصورة
-    # --------------------------------------------------------
+    # -----------------------------------------------------
 
     image = await get_photo(
         update
     )
 
-    # --------------------------------------------------------
-    # استخراج وحفظ البيانات
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # الوضع
+    # -----------------------------------------------------
+
+    mode = context.user_data.get(
+        "pdf_mode",
+        DEFAULT_MODE
+    )
+
+    guests = []
+
+    # -----------------------------------------------------
+    # معالجة كل نزيل
+    # -----------------------------------------------------
 
     for guest_text in guests_text:
 
@@ -1776,6 +1275,7 @@ async def process_message(
             guest_text
         )
 
+        # حفظ قاعدة البيانات
         save_guest(
             guest,
             update
@@ -1785,57 +1285,11 @@ async def process_message(
             guest
         )
 
-    # --------------------------------------------------------
-    # لا يوجد نزلاء
-    # --------------------------------------------------------
+    # =====================================================
+    # وضع ملف مستقل
+    # =====================================================
 
-    if not guests:
-
-        await message.reply_text(
-            "❌ لم يتم العثور على بيانات نزيل."
-        )
-
-        return
-
-    # ========================================================
-    # وضع ملف واحد
-    # ========================================================
-
-    if PDF_MODE == "all":
-
-        pdf_file = create_all_guests_pdf(
-            guests,
-            image
-        )
-
-        today = date.today().isoformat()
-
-        filename = (
-            f"تقرير_النزلاء_{today}.pdf"
-        )
-
-        await message.reply_document(
-
-            document=pdf_file,
-
-            filename=filename,
-
-            caption=(
-                "📚 تم إنشاء التقرير بنجاح\n\n"
-
-                f"👥 عدد النزلاء: {len(guests)}\n"
-
-                "📄 جميع البيانات موجودة في ملف PDF واحد.\n\n"
-
-                "✅ تم حفظ البيانات في قاعدة البيانات."
-            )
-        )
-
-    # ========================================================
-    # وضع الملفات المنفصلة
-    # ========================================================
-
-    else:
+    if mode == "single":
 
         for guest in guests:
 
@@ -1860,7 +1314,8 @@ async def process_message(
                 filename=filename,
 
                 caption=(
-                    "📋 تقرير نزيل\n\n"
+
+                    "📋 تم تسجيل النزيل بنجاح\n\n"
 
                     f"👤 الاسم: {guest_name}\n"
 
@@ -1876,7 +1331,7 @@ async def process_message(
                     f"📅 تاريخ النزول: "
                     f"{guest.get('تاريخ النزول', 'غير مذكور')}\n\n"
 
-                    "✅ تم حفظ البيانات."
+                    "✅ تم حفظ البيانات في قاعدة البيانات."
                 )
             )
 
@@ -1884,23 +1339,61 @@ async def process_message(
                 0.5
             )
 
-    # --------------------------------------------------------
-    # رسالة نهائية
-    # --------------------------------------------------------
+    # =====================================================
+    # وضع ملف واحد لجميع النزلاء
+    # =====================================================
+
+    elif mode == "all":
+
+        pdf_file = create_all_guests_pdf(
+            guests,
+            image
+        )
+
+        filename = (
+            f"نزلاء_الفنادق_"
+            f"{date.today().isoformat()}.pdf"
+        )
+
+        await message.reply_document(
+
+            document=pdf_file,
+
+            filename=filename,
+
+            caption=(
+
+                "📚 تم إنشاء ملف موحد للنزلاء\n\n"
+
+                f"👥 عدد النزلاء: {len(guests)}\n\n"
+
+                "✅ تم حفظ جميع البيانات في قاعدة البيانات."
+            )
+        )
+
+    # =====================================================
+    # الرسالة النهائية
+    # =====================================================
 
     await message.reply_text(
-        f"✅ تمت معالجة {len(guests)} نزيل بنجاح.\n\n"
 
-        "📊 تمت إضافة البيانات إلى قاعدة البيانات.\n\n"
+        f"✅ تمت معالجة {len(guests)} نزيل.\n\n"
 
-        "لإنشاء التقرير اليومي استخدم:\n"
-        "/daily"
+        f"📄 الوضع الحالي: "
+        f"{'ملف مستقل لكل نزيل' if mode == 'single' else 'ملف واحد لجميع النزلاء'}\n\n"
+
+        "📊 للحصول على التقرير اليومي:\n"
+        "/daily\n\n"
+
+        "💡 لتغيير طريقة إخراج الملفات:\n"
+        "/single\n"
+        "/all"
     )
 
 
-# ============================================================
+# =========================================================
 # التقرير اليومي
-# ============================================================
+# =========================================================
 
 async def daily_report(
     update: Update,
@@ -1916,6 +1409,7 @@ async def daily_report(
     if not rows:
 
         await update.message.reply_text(
+
             "📋 لا توجد بيانات مسجلة اليوم حتى الآن."
         )
 
@@ -1939,6 +1433,7 @@ async def daily_report(
     )
 
     text = (
+
         "📋 تقرير عمل قسم معلومات الفنادق\n\n"
 
         f"📅 التاريخ: {target_date}\n\n"
@@ -1974,21 +1469,34 @@ async def daily_report(
             f"• {name}: {count}\n"
         )
 
+    # -----------------------------------------------------
+    # التحليل
+    # -----------------------------------------------------
+
     top_gov = (
+
         governorates.most_common(1)[0]
+
         if governorates
+
         else ("غير متوفر", 0)
     )
 
     top_hotel = (
+
         hotels.most_common(1)[0]
+
         if hotels
+
         else ("غير متوفر", 0)
     )
 
     top_reason = (
+
         reasons.most_common(1)[0]
+
         if reasons
+
         else ("غير متوفر", 0)
     )
 
@@ -2013,17 +1521,13 @@ async def daily_report(
         "إلى أسباب الإقامة المسجلة خلال اليوم."
     )
 
-    # --------------------------------------------------------
-    # إرسال التقرير النصي
-    # --------------------------------------------------------
-
     await update.message.reply_text(
         text
     )
 
-    # --------------------------------------------------------
-    # إنشاء PDF
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # PDF
+    # -----------------------------------------------------
 
     pdf_file = create_daily_pdf(
         rows,
@@ -2049,9 +1553,375 @@ async def daily_report(
     )
 
 
-# ============================================================
+# =========================================================
+# إنشاء التقرير اليومي PDF
+# =========================================================
+
+def create_daily_pdf(
+    rows,
+    target_date,
+    title="تقرير عمل قسم معلومات الفنادق"
+):
+
+    buffer = BytesIO()
+
+    pdf = canvas.Canvas(
+        buffer,
+        pagesize=A4
+    )
+
+    y = PAGE_HEIGHT - 120
+
+    # -----------------------------------------------------
+    # العنوان
+    # -----------------------------------------------------
+
+    draw_pdf_header(
+        pdf,
+        title
+    )
+
+    pdf.setFont(
+        PDF_FONT,
+        12
+    )
+
+    pdf.drawRightString(
+        PAGE_WIDTH - 50,
+        y,
+        arabic_text(
+            f"التاريخ: {target_date}"
+        )
+    )
+
+    y -= 40
+
+    # -----------------------------------------------------
+    # الإحصائيات
+    # -----------------------------------------------------
+
+    total = len(rows)
+
+    governorates = Counter(
+        row["governorate"]
+        for row in rows
+    )
+
+    hotels = Counter(
+        row["hotel"]
+        for row in rows
+    )
+
+    reasons = Counter(
+        row["reason"]
+        for row in rows
+    )
+
+    rooms = Counter(
+        row["room"]
+        for row in rows
+        if row["room"]
+        and row["room"] != "غير مذكور"
+    )
+
+    suites = Counter(
+        row["suite"]
+        for row in rows
+        if row["suite"]
+        and row["suite"] != "غير مذكور"
+    )
+
+    pdf.setFont(
+        PDF_FONT,
+        14
+    )
+
+    pdf.drawRightString(
+        PAGE_WIDTH - 50,
+        y,
+        arabic_text(
+            f"إجمالي النزلاء: {total}"
+        )
+    )
+
+    y -= 40
+
+    # -----------------------------------------------------
+    # قسم الإحصائيات
+    # -----------------------------------------------------
+
+    def draw_counter_section(
+        section_title,
+        counter
+    ):
+
+        nonlocal y
+
+        if y < 120:
+
+            pdf.showPage()
+
+            draw_pdf_header(
+                pdf,
+                title
+            )
+
+            y = PAGE_HEIGHT - 125
+
+        pdf.setFont(
+            PDF_FONT,
+            14
+        )
+
+        pdf.drawRightString(
+            PAGE_WIDTH - 50,
+            y,
+            arabic_text(
+                section_title
+            )
+        )
+
+        y -= 30
+
+        pdf.setFont(
+            PDF_FONT,
+            10
+        )
+
+        if not counter:
+
+            pdf.drawRightString(
+                PAGE_WIDTH - 70,
+                y,
+                arabic_text(
+                    "لا توجد بيانات"
+                )
+            )
+
+            y -= 25
+
+            return
+
+        for name, count in counter.most_common():
+
+            if y < 70:
+
+                pdf.showPage()
+
+                draw_pdf_header(
+                    pdf,
+                    title
+                )
+
+                y = PAGE_HEIGHT - 125
+
+            line = f"• {name}: {count}"
+
+            pdf.drawRightString(
+                PAGE_WIDTH - 70,
+                y,
+                arabic_text(
+                    line
+                )
+            )
+
+            y -= 22
+
+        y -= 12
+
+    # المحافظات
+    draw_counter_section(
+        "أولاً: التوزيع حسب المحافظة",
+        governorates
+    )
+
+    # الفنادق
+    draw_counter_section(
+        "ثانياً: توزيع النزلاء على الفنادق",
+        hotels
+    )
+
+    # أسباب الإقامة
+    draw_counter_section(
+        "ثالثاً: أسباب الإقامة",
+        reasons
+    )
+
+    # الغرف
+    draw_counter_section(
+        "رابعاً: أرقام الغرف",
+        rooms
+    )
+
+    # الأجنحة
+    draw_counter_section(
+        "خامساً: الأجنحة",
+        suites
+    )
+
+    # -----------------------------------------------------
+    # التقرير السردي
+    # -----------------------------------------------------
+
+    if y < 180:
+
+        pdf.showPage()
+
+        draw_pdf_header(
+            pdf,
+            title
+        )
+
+        y = PAGE_HEIGHT - 125
+
+    pdf.setFont(
+        PDF_FONT,
+        14
+    )
+
+    pdf.drawRightString(
+        PAGE_WIDTH - 50,
+        y,
+        arabic_text(
+            "سادساً: التحليل والسرد"
+        )
+    )
+
+    y -= 30
+
+    # أكبر محافظة
+    if governorates:
+
+        top_governorate, gov_count = (
+            governorates.most_common(1)[0]
+        )
+
+    else:
+
+        top_governorate = "غير متوفر"
+        gov_count = 0
+
+    # أكبر فندق
+    if hotels:
+
+        top_hotel, hotel_count = (
+            hotels.most_common(1)[0]
+        )
+
+    else:
+
+        top_hotel = "غير متوفر"
+        hotel_count = 0
+
+    # أكبر سبب
+    if reasons:
+
+        top_reason, reason_count = (
+            reasons.most_common(1)[0]
+        )
+
+    else:
+
+        top_reason = "غير متوفر"
+        reason_count = 0
+
+    narrative = [
+
+        f"بلغ إجمالي عدد النزلاء الذين تم تسجيل "
+        f"بياناتهم خلال يوم {target_date} "
+        f"عدد {total} نزيلاً.",
+
+        f"وبحسب التوزيع الجغرافي، جاءت محافظة "
+        f"{top_governorate} في المرتبة الأولى "
+        f"بعدد {gov_count} نزلاء.",
+
+        f"أما على مستوى الفنادق، فقد سجل فندق "
+        f"{top_hotel} العدد الأكبر من النزلاء "
+        f"بواقع {hotel_count} نزلاء.",
+
+        f"وكان سبب الإقامة الأكثر تكراراً هو "
+        f"{top_reason} بعدد {reason_count} نزلاء.",
+
+        "وتعكس البيانات المسجلة خلال اليوم حركة "
+        "النزلاء وتوزعهم على الفنادق والمحافظات "
+        "وأسباب الإقامة، بما يساهم في متابعة "
+        "العمل وتنظيم المعلومات اليومية لقسم "
+        "معلومات الفنادق."
+    ]
+
+    pdf.setFont(
+        PDF_FONT,
+        10
+    )
+
+    for paragraph in narrative:
+
+        words = paragraph.split()
+
+        lines = []
+
+        current = ""
+
+        for word in words:
+
+            test = (
+                current + " " + word
+            ).strip()
+
+            if len(test) > 75:
+
+                if current:
+                    lines.append(
+                        current
+                    )
+
+                current = word
+
+            else:
+
+                current = test
+
+        if current:
+
+            lines.append(
+                current
+            )
+
+        for line in lines:
+
+            if y < 60:
+
+                pdf.showPage()
+
+                draw_pdf_header(
+                    pdf,
+                    title
+                )
+
+                y = PAGE_HEIGHT - 125
+
+            pdf.drawRightString(
+                PAGE_WIDTH - 50,
+                y,
+                arabic_text(
+                    line
+                )
+            )
+
+            y -= 20
+
+        y -= 10
+
+    pdf.save()
+
+    buffer.seek(0)
+
+    return buffer
+
+
+# =========================================================
 # تقرير أمس
-# ============================================================
+# =========================================================
 
 async def yesterday_report(
     update: Update,
@@ -2070,7 +1940,9 @@ async def yesterday_report(
     if not rows:
 
         await update.message.reply_text(
-            f"📋 لا توجد بيانات مسجلة بتاريخ {yesterday}."
+
+            f"📋 لا توجد بيانات مسجلة بتاريخ "
+            f"{yesterday}."
         )
 
         return
@@ -2093,23 +1965,23 @@ async def yesterday_report(
 
         caption=(
             "📋 تقرير قسم معلومات الفنادق\n"
-            f"📅 {yesterday}\n\n"
-            "✅ تم إنشاء التقرير."
+            f"📅 {yesterday}"
         )
     )
 
 
-# ============================================================
+# =========================================================
 # التقرير الشهري
-# ============================================================
+# =========================================================
 
 async def monthly_report(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    current_month = date.today().strftime(
-        "%Y-%m"
+    current_month = (
+        date.today()
+        .strftime("%Y-%m")
     )
 
     rows = get_guests_by_month(
@@ -2119,7 +1991,9 @@ async def monthly_report(
     if not rows:
 
         await update.message.reply_text(
-            "📋 لا توجد بيانات مسجلة خلال الشهر الحالي."
+
+            "📋 لا توجد بيانات مسجلة "
+            "خلال الشهر الحالي."
         )
 
         return
@@ -2142,6 +2016,7 @@ async def monthly_report(
     )
 
     text = (
+
         "📊 التقرير الشهري\n\n"
 
         f"📅 الشهر: {current_month}\n\n"
@@ -2206,86 +2081,26 @@ async def monthly_report(
     )
 
 
-# ============================================================
-# إعداد قائمة أوامر Telegram
-# ============================================================
-
-async def setup_commands(application):
-
-    commands = [
-
-        BotCommand(
-            "start",
-            "رسالة الترحيب"
-        ),
-
-        BotCommand(
-            "daily",
-            "التقرير اليومي"
-        ),
-
-        BotCommand(
-            "yesterday",
-            "تقرير أمس"
-        ),
-
-        BotCommand(
-            "monthly",
-            "التقرير الشهري"
-        ),
-
-        BotCommand(
-            "mode",
-            "اختيار وضع PDF"
-        ),
-
-        BotCommand(
-            "all",
-            "جميع النزلاء في ملف واحد"
-        ),
-
-        BotCommand(
-            "single",
-            "كل نزيل في ملف مستقل"
-        ),
-
-        BotCommand(
-            "help",
-            "المساعدة"
-        ),
-    ]
-
-    await application.bot.set_my_commands(
-        commands
-    )
-
-    print(
-        "Telegram commands registered successfully."
-    )
-
-
-# ============================================================
+# =========================================================
 # إنشاء التطبيق
-# ============================================================
+# =========================================================
 
 if not TOKEN:
 
     print(
-        "ERROR: BOT_TOKEN is not set!"
+        "WARNING: BOT_TOKEN is not set!"
     )
-
 
 app = (
     ApplicationBuilder()
     .token(TOKEN)
-    .post_init(setup_commands)
     .build()
 )
 
 
-# ============================================================
-# الأوامر
-# ============================================================
+# =========================================================
+# أوامر البوت
+# =========================================================
 
 app.add_handler(
     CommandHandler(
@@ -2296,8 +2111,15 @@ app.add_handler(
 
 app.add_handler(
     CommandHandler(
-        "help",
-        help_command
+        "single",
+        single_mode
+    )
+)
+
+app.add_handler(
+    CommandHandler(
+        "all",
+        all_mode
     )
 )
 
@@ -2324,29 +2146,15 @@ app.add_handler(
 
 app.add_handler(
     CommandHandler(
-        "mode",
-        mode_command
-    )
-)
-
-app.add_handler(
-    CommandHandler(
-        "all",
-        all_command
-    )
-)
-
-app.add_handler(
-    CommandHandler(
-        "single",
-        single_command
+        "cancel",
+        cancel
     )
 )
 
 
-# ============================================================
-# استقبال رسائل النزلاء
-# ============================================================
+# =========================================================
+# استقبال الرسائل
+# =========================================================
 
 app.add_handler(
 
@@ -2365,30 +2173,21 @@ app.add_handler(
 )
 
 
-# ============================================================
+# =========================================================
 # MAIN
-# ============================================================
+# =========================================================
 
 async def main():
 
-    # --------------------------------------------------------
+    # -----------------------------------------------------
     # قاعدة البيانات
-    # --------------------------------------------------------
+    # -----------------------------------------------------
 
     init_database()
 
-    # --------------------------------------------------------
-    # Web Server لـ Render
-    # --------------------------------------------------------
-
-    threading.Thread(
-        target=run_web_server,
-        daemon=True
-    ).start()
-
-    print(
-        "Starting Telegram Bot..."
-    )
+    # -----------------------------------------------------
+    # التأكد من وجود التوكن
+    # -----------------------------------------------------
 
     if not TOKEN:
 
@@ -2398,11 +2197,35 @@ async def main():
 
         return
 
-    # --------------------------------------------------------
-    # تشغيل Telegram
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # تشغيل خادم Render
+    # -----------------------------------------------------
+
+    threading.Thread(
+
+        target=run_web_server,
+
+        daemon=True
+
+    ).start()
+
+    # -----------------------------------------------------
+    # تهيئة Telegram
+    # -----------------------------------------------------
 
     await app.initialize()
+
+    # -----------------------------------------------------
+    # تسجيل قائمة الأوامر
+    # -----------------------------------------------------
+
+    await set_bot_commands(
+        app
+    )
+
+    # -----------------------------------------------------
+    # تشغيل البوت
+    # -----------------------------------------------------
 
     await app.start()
 
@@ -2411,6 +2234,10 @@ async def main():
     print(
         "Telegram Bot is running successfully!"
     )
+
+    # -----------------------------------------------------
+    # إبقاء البرنامج يعمل
+    # -----------------------------------------------------
 
     try:
 
@@ -2425,12 +2252,12 @@ async def main():
         await app.shutdown()
 
 
-# ============================================================
-# تشغيل البرنامج
-# ============================================================
+# =========================================================
+# START PROGRAM
+# =========================================================
 
 if __name__ == "__main__":
 
     asyncio.run(
         main()
-        )
+    )
