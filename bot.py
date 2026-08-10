@@ -24,11 +24,17 @@ from telegram.ext import (
 # =========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 DB_FILE = "hotel_bot.db"
 
+# رمز دخول المستخدمين العاديين
+LOGIN_PASSWORD = "123456"
+
+
+# =========================================================
+# Logging
+# =========================================================
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -43,74 +49,47 @@ logger = logging.getLogger(__name__)
 # =========================================================
 
 def get_db():
-
     conn = sqlite3.connect(DB_FILE)
-
     conn.row_factory = sqlite3.Row
-
     return conn
-
 
 
 def init_db():
 
     conn = get_db()
-
     cur = conn.cursor()
 
-
+    # جدول المستخدمين
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-
-        telegram_id INTEGER PRIMARY KEY,
-
-        username TEXT,
-
-        logged_in INTEGER DEFAULT 0,
-
-        login_time TEXT
-
-    )
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id INTEGER PRIMARY KEY,
+            username TEXT,
+            logged_in INTEGER DEFAULT 0,
+            login_time TEXT
+        )
     """)
 
-
+    # جدول النزلاء
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS guests (
-
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-        telegram_id INTEGER,
-
-        full_name TEXT,
-
-        mother_name TEXT,
-
-        birth_place_date TEXT,
-
-        original_residence TEXT,
-
-        governorate TEXT,
-
-        hotel_name TEXT,
-
-        suite_number TEXT,
-
-        room_number TEXT,
-
-        stay_duration TEXT,
-
-        stay_reason TEXT,
-
-        created_at TEXT
-
-    )
+        CREATE TABLE IF NOT EXISTS guests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER,
+            full_name TEXT,
+            mother_name TEXT,
+            birth_place_date TEXT,
+            original_residence TEXT,
+            governorate TEXT,
+            hotel_name TEXT,
+            suite_number TEXT,
+            room_number TEXT,
+            stay_duration TEXT,
+            stay_reason TEXT,
+            created_at TEXT
+        )
     """)
-
 
     conn.commit()
-
     conn.close()
-
 
 
 def register_user(user_id, username=""):
@@ -118,233 +97,215 @@ def register_user(user_id, username=""):
     conn = get_db()
 
     conn.execute("""
-    INSERT INTO users
-    (telegram_id, username)
+        INSERT INTO users
+        (telegram_id, username)
+        VALUES (?, ?)
 
-    VALUES (?,?)
-
-    ON CONFLICT(telegram_id)
-
-    DO UPDATE SET username=excluded.username
-
-    """,
-    (
+        ON CONFLICT(telegram_id)
+        DO UPDATE SET username = excluded.username
+    """, (
         user_id,
         username
     ))
 
     conn.commit()
-
     conn.close()
-
 
 
 def set_login(user_id, status):
 
     conn = get_db()
 
+    login_time = (
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if status
+        else None
+    )
 
     conn.execute("""
-    UPDATE users
-
-    SET logged_in=?,
-    login_time=?
-
-    WHERE telegram_id=?
-
-    """,
-    (
+        UPDATE users
+        SET logged_in = ?,
+            login_time = ?
+        WHERE telegram_id = ?
+    """, (
         1 if status else 0,
-
-        datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        ) if status else None,
-
+        login_time,
         user_id
     ))
 
-
     conn.commit()
-
     conn.close()
-
 
 
 def is_logged_in(user_id):
 
     conn = get_db()
 
-
-    row = conn.execute(
-        """
+    row = conn.execute("""
         SELECT logged_in
         FROM users
-        WHERE telegram_id=?
-        """,
-        (user_id,)
-    ).fetchone()
-
+        WHERE telegram_id = ?
+    """, (user_id,)).fetchone()
 
     conn.close()
 
-
-    return bool(
-        row and row["logged_in"] == 1
-    )
-
+    return bool(row and row["logged_in"] == 1)
 
 
 def save_guest(user_id, data):
 
     conn = get_db()
 
-
     conn.execute("""
-    INSERT INTO guests
-
-    (
-    telegram_id,
-    full_name,
-    mother_name,
-    birth_place_date,
-    original_residence,
-    governorate,
-    hotel_name,
-    suite_number,
-    room_number,
-    stay_duration,
-    stay_reason,
-    created_at
-    )
-
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-
-    """,
-    (
-        user_id,
-        data.get("full_name",""),
-        data.get("mother_name",""),
-        data.get("birth_place_date",""),
-        data.get("original_residence",""),
-        data.get("governorate",""),
-        data.get("hotel_name",""),
-        data.get("suite_number",""),
-        data.get("room_number",""),
-        data.get("stay_duration",""),
-        data.get("stay_reason",""),
-        datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
+        INSERT INTO guests
+        (
+            telegram_id,
+            full_name,
+            mother_name,
+            birth_place_date,
+            original_residence,
+            governorate,
+            hotel_name,
+            suite_number,
+            room_number,
+            stay_duration,
+            stay_reason,
+            created_at
         )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        user_id,
+        data.get("full_name", ""),
+        data.get("mother_name", ""),
+        data.get("birth_place_date", ""),
+        data.get("original_residence", ""),
+        data.get("governorate", ""),
+        data.get("hotel_name", ""),
+        data.get("suite_number", ""),
+        data.get("room_number", ""),
+        data.get("stay_duration", ""),
+        data.get("stay_reason", ""),
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ))
 
-
     conn.commit()
-
     conn.close()
-    # =========================================================
+
+
+# =========================================================
+# التحقق من المدير
+# =========================================================
+
+def is_admin(user_id):
+    return user_id == ADMIN_ID
+
+
+def has_access(user_id):
+
+    # المدير لديه صلاحية مباشرة
+    if is_admin(user_id):
+        return True
+
+    # المستخدم العادي يجب أن يكون مسجلاً للدخول
+    return is_logged_in(user_id)
+
+
+# =========================================================
 # لوحات الأزرار
 # =========================================================
 
 def start_keyboard():
 
-    return InlineKeyboardMarkup(
+    return InlineKeyboardMarkup([
         [
-            [
-                InlineKeyboardButton(
-                    "🔐 تسجيل دخول",
-                    callback_data="login"
-                )
-            ]
+            InlineKeyboardButton(
+                "🔐 تسجيل دخول",
+                callback_data="login"
+            )
         ]
-    )
-
+    ])
 
 
 def main_menu_keyboard():
 
-    return InlineKeyboardMarkup(
+    return InlineKeyboardMarkup([
         [
-            [
-                InlineKeyboardButton(
-                    "📝 تسجيل نزيل",
-                    callback_data="add_guest"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "📊 الإحصائيات",
-                    callback_data="statistics"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "📋 آخر السجلات",
-                    callback_data="last_records"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🚪 تسجيل خروج",
-                    callback_data="logout"
-                )
-            ]
+            InlineKeyboardButton(
+                "📝 تسجيل نزيل",
+                callback_data="add_guest"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📊 الإحصائيات",
+                callback_data="statistics"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📋 آخر السجلات",
+                callback_data="last_records"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🚪 تسجيل خروج",
+                callback_data="logout"
+            )
         ]
-    )
-
+    ])
 
 
 def cancel_keyboard():
 
-    return InlineKeyboardMarkup(
+    return InlineKeyboardMarkup([
         [
-            [
-                InlineKeyboardButton(
-                    "❌ إلغاء",
-                    callback_data="cancel"
-                )
-            ]
+            InlineKeyboardButton(
+                "❌ إلغاء",
+                callback_data="cancel"
+            )
         ]
-    )
+    ])
 
 
 # =========================================================
-# أمر البداية
+# /start
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
 
+    if not user:
+        return
 
     register_user(
         user.id,
         user.username or ""
     )
 
-
     context.user_data.clear()
 
+    # =====================================================
+    # المدير
+    # =====================================================
 
-    # دخول المدير مباشرة عن طريق ID
+    if is_admin(user.id):
 
-    if user.id == ADMIN_ID:
-
-        set_login(
-            user.id,
-            True
-        )
-
+        set_login(user.id, True)
 
         await update.message.reply_text(
-            "👑 أهلاً بك المدير\n\n"
-            "تم التعرف على حساب الإدارة تلقائياً.\n"
+            "👑 أهلاً بك أيها المدير\n\n"
+            "🆔 تم التعرف على حسابك كمدير بواسطة Telegram ID.\n\n"
             "اختر العملية المطلوبة:",
             reply_markup=main_menu_keyboard()
         )
 
         return
 
-
+    # =====================================================
+    # مستخدم مسجل دخول
+    # =====================================================
 
     if is_logged_in(user.id):
 
@@ -356,7 +317,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # مستخدم غير مسجل
+    # =====================================================
 
     await update.message.reply_text(
         "🌹 مرحباً بك في نظام إدارة معلومات الفنادق\n\n"
@@ -365,7 +328,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔐 للمتابعة يجب تسجيل الدخول أولاً.",
         reply_markup=start_keyboard()
     )
-
 
 
 # =========================================================
@@ -378,13 +340,23 @@ async def login_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
+    user = update.effective_user
+
+    # المدير لا يحتاج تسجيل دخول
+    if is_admin(user.id):
+
+        set_login(user.id, True)
+
+        await query.edit_message_text(
+            "👑 أنت المدير.\n\n"
+            "تم التعرف عليك تلقائياً بواسطة ID.",
+            reply_markup=main_menu_keyboard()
+        )
+
+        return
 
     context.user_data.clear()
-
-
     context.user_data["state"] = "login"
-
-
 
     await query.edit_message_text(
         "🔐 تسجيل الدخول\n\n"
@@ -393,93 +365,92 @@ async def login_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-
 # =========================================================
 # استقبال الرسائل
 # =========================================================
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def message_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not update.message:
         return
 
-
     user = update.effective_user
 
-    text = update.message.text.strip()
+    if not user:
+        return
 
+    text = (update.message.text or "").strip()
 
     state = context.user_data.get("state")
 
-
-
-    # تسجيل دخول المستخدمين العاديين
+    # =====================================================
+    # تسجيل دخول المستخدم العادي
+    # =====================================================
 
     if state == "login":
 
+        # المدير لا يحتاج الرمز
+        if is_admin(user.id):
 
-        # رمز دخول افتراضي
-        # يمكن تغييره لاحقاً
+            set_login(user.id, True)
+            context.user_data.clear()
 
-        if text == "123456":
-
-
-            set_login(
-                user.id,
-                True
+            await update.message.reply_text(
+                "👑 تم التعرف عليك كمدير.\n\n"
+                "اختر العملية المطلوبة:",
+                reply_markup=main_menu_keyboard()
             )
 
+            return
+
+        if text == LOGIN_PASSWORD:
+
+            set_login(user.id, True)
 
             context.user_data.clear()
 
-
             await update.message.reply_text(
-                "✅ تم تسجيل الدخول بنجاح\n\n"
+                "✅ تم تسجيل الدخول بنجاح.\n\n"
                 "اختر العملية المطلوبة:",
                 reply_markup=main_menu_keyboard()
             )
 
         else:
 
-
             await update.message.reply_text(
-                "❌ رمز الدخول غير صحيح"
+                "❌ رمز الدخول غير صحيح.\n\n"
+                "حاول مرة أخرى:"
             )
-
 
         return
 
-
-
+    # =====================================================
     # حماية النظام
+    # =====================================================
 
-    if not is_logged_in(user.id) and user.id != ADMIN_ID:
-
+    if not has_access(user.id):
 
         await update.message.reply_text(
-            "🔒 يجب تسجيل الدخول أولاً.\n"
+            "🔒 يجب تسجيل الدخول أولاً.\n\n"
             "اضغط /start"
         )
 
         return
 
-
-
-    # بدء تسجيل نزيل
-
+    # =====================================================
+    # تسجيل نزيل - الاسم
+    # =====================================================
 
     if state == "guest_full_name":
 
-
         context.user_data["guest"] = {
-
             "full_name": text
-
         }
 
-
         context.user_data["state"] = "guest_mother"
-
 
         await update.message.reply_text(
             "2️⃣ اسم الأم:"
@@ -487,15 +458,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # اسم الأم
+    # =====================================================
 
     if state == "guest_mother":
 
-
         context.user_data["guest"]["mother_name"] = text
-
         context.user_data["state"] = "guest_birth"
-
 
         await update.message.reply_text(
             "3️⃣ مكان وتاريخ الولادة:"
@@ -503,15 +473,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # مكان وتاريخ الولادة
+    # =====================================================
 
     if state == "guest_birth":
 
-
         context.user_data["guest"]["birth_place_date"] = text
-
         context.user_data["state"] = "guest_residence"
-
 
         await update.message.reply_text(
             "4️⃣ السكن الأصلي:"
@@ -519,15 +488,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # السكن الأصلي
+    # =====================================================
 
     if state == "guest_residence":
 
-
         context.user_data["guest"]["original_residence"] = text
-
         context.user_data["state"] = "guest_governorate"
-
 
         await update.message.reply_text(
             "5️⃣ المحافظة:"
@@ -535,15 +503,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # المحافظة
+    # =====================================================
 
     if state == "guest_governorate":
 
-
         context.user_data["guest"]["governorate"] = text
-
         context.user_data["state"] = "guest_hotel"
-
 
         await update.message.reply_text(
             "6️⃣ اسم الفندق:"
@@ -551,15 +518,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # الفندق
+    # =====================================================
 
     if state == "guest_hotel":
 
-
         context.user_data["guest"]["hotel_name"] = text
-
         context.user_data["state"] = "guest_suite"
-
 
         await update.message.reply_text(
             "7️⃣ رقم الجناح:"
@@ -567,13 +533,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
+    # =====================================================
+    # الجناح
+    # =====================================================
 
-
-يتبع الجزء الثالث (إكمال تسجيل النزيل + الأزرار + تشغيل Render).
     if state == "guest_suite":
 
         context.user_data["guest"]["suite_number"] = text
-
         context.user_data["state"] = "guest_room"
 
         await update.message.reply_text(
@@ -582,12 +548,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # الغرفة
+    # =====================================================
 
     if state == "guest_room":
 
         context.user_data["guest"]["room_number"] = text
-
         context.user_data["state"] = "guest_duration"
 
         await update.message.reply_text(
@@ -596,12 +563,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # مدة الإقامة
+    # =====================================================
 
     if state == "guest_duration":
 
         context.user_data["guest"]["stay_duration"] = text
-
         context.user_data["state"] = "guest_reason"
 
         await update.message.reply_text(
@@ -610,88 +578,101 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # سبب الإقامة
+    # =====================================================
 
     if state == "guest_reason":
 
         context.user_data["guest"]["stay_reason"] = text
-
 
         save_guest(
             user.id,
             context.user_data["guest"]
         )
 
-
         guest = context.user_data["guest"]
 
         context.user_data.clear()
-
 
         await update.message.reply_text(
             "✅ تم تسجيل النزيل بنجاح\n\n"
             f"👤 الاسم: {guest['full_name']}\n"
             f"👩 اسم الأم: {guest['mother_name']}\n"
+            f"📍 الولادة: {guest['birth_place_date']}\n"
+            f"🏠 السكن الأصلي: {guest['original_residence']}\n"
+            f"🏛 المحافظة: {guest['governorate']}\n"
             f"🏨 الفندق: {guest['hotel_name']}\n"
+            f"🚪 الجناح: {guest['suite_number']}\n"
             f"🚪 الغرفة: {guest['room_number']}\n"
             f"📅 مدة الإقامة: {guest['stay_duration']}\n"
-            f"📝 السبب: {guest['stay_reason']}",
+            f"📝 سبب الإقامة: {guest['stay_reason']}",
             reply_markup=main_menu_keyboard()
         )
 
         return
 
 
-
 # =========================================================
-# الأزرار
+# معالجة الأزرار
 # =========================================================
 
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
 
     await query.answer()
 
-
     user = update.effective_user
+
+    if not user:
+        return
 
     data = query.data
 
-
+    # =====================================================
+    # تسجيل الدخول
+    # =====================================================
 
     if data == "login":
 
-        context.user_data.clear()
-
-        context.user_data["state"] = "login"
-
-
-        await query.edit_message_text(
-            "🔐 تسجيل الدخول\n\n"
-            "أرسل رمز الدخول:",
-            reply_markup=cancel_keyboard()
-        )
+        await login_button(update, context)
 
         return
 
-
+    # =====================================================
+    # إلغاء
+    # =====================================================
 
     if data == "cancel":
 
         context.user_data.clear()
 
+        if is_admin(user.id):
 
-        await query.edit_message_text(
-            "تم إلغاء العملية.",
-            reply_markup=start_keyboard()
-        )
+            await query.edit_message_text(
+                "👑 تم إلغاء العملية.\n\n"
+                "اختر العملية المطلوبة:",
+                reply_markup=main_menu_keyboard()
+            )
+
+        else:
+
+            await query.edit_message_text(
+                "❌ تم إلغاء العملية.",
+                reply_markup=start_keyboard()
+            )
 
         return
 
+    # =====================================================
+    # حماية الأزرار
+    # =====================================================
 
-
-    if not is_logged_in(user.id) and user.id != ADMIN_ID:
+    if not has_access(user.id):
 
         await query.edit_message_text(
             "🔒 يجب تسجيل الدخول أولاً.",
@@ -700,14 +681,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # تسجيل نزيل
+    # =====================================================
 
     if data == "add_guest":
 
         context.user_data.clear()
 
         context.user_data["state"] = "guest_full_name"
-
 
         await query.edit_message_text(
             "📝 تسجيل نزيل جديد\n\n"
@@ -717,65 +699,65 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # الإحصائيات
+    # =====================================================
 
     if data == "statistics":
 
         conn = get_db()
 
-
         total = conn.execute(
             "SELECT COUNT(*) FROM guests"
         ).fetchone()[0]
 
-
         conn.close()
 
-
         await query.edit_message_text(
-            f"📊 الإحصائيات\n\n"
-            f"👤 عدد النزلاء: {total}",
+            "📊 الإحصائيات\n\n"
+            f"👤 عدد النزلاء المسجلين: {total}",
             reply_markup=main_menu_keyboard()
         )
 
         return
 
-
+    # =====================================================
+    # آخر السجلات
+    # =====================================================
 
     if data == "last_records":
 
         conn = get_db()
 
-
-        rows = conn.execute(
-            """
-            SELECT full_name,hotel_name,room_number
+        rows = conn.execute("""
+            SELECT
+                full_name,
+                hotel_name,
+                room_number,
+                created_at
             FROM guests
             ORDER BY id DESC
             LIMIT 10
-            """
-        ).fetchall()
-
+        """).fetchall()
 
         conn.close()
 
-
         if not rows:
 
-            text = "لا توجد سجلات."
+            text = "📋 لا توجد سجلات حتى الآن."
 
         else:
 
-            text = "📋 آخر السجلات:\n\n"
+            text = "📋 آخر 10 سجلات:\n\n"
 
-            for r in rows:
+            for index, row in enumerate(rows, start=1):
 
                 text += (
-                    f"👤 {r['full_name']}\n"
-                    f"🏨 {r['hotel_name']}\n"
-                    f"🚪 غرفة {r['room_number']}\n\n"
+                    f"{index}️⃣ 👤 {row['full_name']}\n"
+                    f"🏨 الفندق: {row['hotel_name']}\n"
+                    f"🚪 الغرفة: {row['room_number']}\n"
+                    f"🕐 {row['created_at']}\n\n"
                 )
-
 
         await query.edit_message_text(
             text,
@@ -784,68 +766,71 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-
+    # =====================================================
+    # تسجيل الخروج
+    # =====================================================
 
     if data == "logout":
 
-        set_login(
-            user.id,
-            False
-        )
-
+        set_login(user.id, False)
 
         context.user_data.clear()
 
-
+        # المدير بعد تسجيل الخروج يعود لشاشة البداية،
+        # وعند الضغط /start سيتم التعرف عليه من ADMIN_ID
         await query.edit_message_text(
-            "🚪 تم تسجيل الخروج.",
+            "🚪 تم تسجيل الخروج.\n\n"
+            "يمكنك الضغط على /start للعودة.",
             reply_markup=start_keyboard()
         )
 
         return
 
 
-
 # =========================================================
 # معالجة الأخطاء
 # =========================================================
 
-async def error_handler(update, context):
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     logger.error(
-        "Error:",
+        "حدث خطأ:",
         exc_info=context.error
     )
 
 
-
 # =========================================================
-# التشغيل
+# تشغيل البوت
 # =========================================================
 
 def main():
 
+    # التحقق من BOT_TOKEN
     if not BOT_TOKEN:
 
-        print(
-            "❌ BOT_TOKEN غير موجود"
-        )
-
+        print("❌ BOT_TOKEN غير موجود في Environment Variables")
         return
 
+    # التحقق من ADMIN_ID
+    if ADMIN_ID == 0:
 
+        print("❌ ADMIN_ID غير موجود أو غير صحيح")
+        return
 
+    # إنشاء قاعدة البيانات
     init_db()
 
-
-
+    # إنشاء التطبيق
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .build()
     )
 
-
+    # /start
     app.add_handler(
         CommandHandler(
             "start",
@@ -853,14 +838,14 @@ def main():
         )
     )
 
-
+    # الأزرار
     app.add_handler(
         CallbackQueryHandler(
             callback_handler
         )
     )
 
-
+    # الرسائل النصية
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -868,24 +853,26 @@ def main():
         )
     )
 
-
+    # الأخطاء
     app.add_error_handler(
         error_handler
     )
 
-
     print("==============================")
-    print("✅ البوت يعمل")
-    print("✅ المدير يدخل عن طريق ADMIN_ID")
+    print("✅ البوت يعمل بنجاح")
+    print("👑 المدير يتم التعرف عليه بواسطة ADMIN_ID")
+    print(f"🆔 ADMIN_ID = {ADMIN_ID}")
     print("==============================")
 
-
+    # تشغيل البوت
     app.run_polling(
         drop_pending_updates=True
     )
 
 
+# =========================================================
+# بداية البرنامج
+# =========================================================
 
 if __name__ == "__main__":
-
     main()
