@@ -2,3 +2,4 @@ python-telegram-bot==21.10
 reportlab
 arabic-reshaper
 python-bidi
+Pillow
