@@ -106,6 +106,7 @@ GOVERNORATES = [
 LOGIN_USERNAME = 1
 LOGIN_PASSWORD = 2
 
+ADD_HOTEL_NAME = 9
 ADD_HOTEL_USERNAME = 10
 ADD_HOTEL_PASSWORD = 11
 
@@ -2291,6 +2292,50 @@ async def add_hotel_start(
         ),
     )
 
+    return ADD_HOTEL_NAME
+
+
+async def add_hotel_name_callback(
+    update,
+    context,
+):
+    query = update.callback_query
+    data = query.data or ""
+
+    try:
+        index = int(data.split(":")[1])
+        hotel_name = HOTELS[index]
+    except Exception:
+        await query.answer("اختيار غير صالح.", show_alert=True)
+        return ADD_HOTEL_NAME
+
+    accounts = await asyncio.to_thread(get_all_hotels)
+    existing_active = next(
+        (
+            account
+            for account in accounts
+            if account["hotel_name"] == hotel_name and account["active"]
+        ),
+        None,
+    )
+
+    if existing_active:
+        await query.answer("يوجد حساب فعال لهذا الفندق.", show_alert=True)
+        await query.edit_message_text(
+            "⚠️ يوجد حساب فعال لهذا الفندق مسبقاً.\n\n"
+            f"🏨 الفندق: {hotel_name}\n"
+            f"👤 المستخدم: {existing_active['username']}"
+        )
+        return ConversationHandler.END
+
+    context.user_data["new_hotel_name"] = hotel_name
+    await query.answer()
+    await query.edit_message_text(
+        f"🏨 الفندق المختار:\n{hotel_name}\n\n"
+        "👤 أرسل اسم المستخدم المطلوب بالحروف الإنجليزية والأرقام:\n\n"
+        "مثال: hotel_qurtuba"
+    )
+
     return ADD_HOTEL_USERNAME
 
 
@@ -3489,75 +3534,6 @@ async def admin_callback(
     data = query.data or ""
 
     # -----------------------------------------------------
-    # اختيار فندق لإنشاء الحساب
-    # -----------------------------------------------------
-
-    if data.startswith(
-        "admin_create_hotel:"
-    ):
-        try:
-            index = int(
-                data.split(":")[1]
-            )
-
-            hotel_name = HOTELS[index]
-
-        except Exception:
-            await query.answer(
-                "اختيار غير صالح.",
-                show_alert=True,
-            )
-
-            return ADD_HOTEL_USERNAME
-
-        accounts = await asyncio.to_thread(
-            get_all_hotels
-        )
-
-        existing_active = next(
-            (
-                account
-                for account in accounts
-                if account["hotel_name"]
-                == hotel_name
-                and account["active"]
-            ),
-            None,
-        )
-
-        if existing_active:
-            await query.answer(
-                "يوجد حساب فعال لهذا الفندق.",
-                show_alert=True,
-            )
-
-            await query.edit_message_text(
-                "⚠️ يوجد حساب فعال لهذا الفندق "
-                "مسبقاً.\n\n"
-                f"🏨 الفندق: {hotel_name}\n"
-                f"👤 المستخدم: "
-                f"{existing_active['username']}"
-            )
-
-            return ADD_HOTEL_USERNAME
-
-        context.user_data[
-            "new_hotel_name"
-        ] = hotel_name
-
-        await query.answer()
-
-        await query.edit_message_text(
-            f"🏨 الفندق المختار:\n"
-            f"{hotel_name}\n\n"
-            "👤 أرسل اسم المستخدم.\n\n"
-            "مثال:\n"
-            "hotel_qurtuba"
-        )
-
-        return ADD_HOTEL_USERNAME
-
-    # -----------------------------------------------------
     # حذف
     # -----------------------------------------------------
 
@@ -3823,6 +3799,13 @@ def build_application():
         ],
 
         states={
+            ADD_HOTEL_NAME: [
+                CallbackQueryHandler(
+                    add_hotel_name_callback,
+                    pattern=r"^admin_create_hotel:",
+                )
+            ],
+
             ADD_HOTEL_USERNAME: [
                 MessageHandler(
                     filters.TEXT
@@ -4042,10 +4025,9 @@ def build_application():
         CallbackQueryHandler(
             admin_callback,
             pattern=(
-                r"^(admin_create_hotel:"
-                r"|delete_hotel:"
+                r"^(delete_hotel:"
                 r"|confirm_delete:"
-                r"|cancel_delete$"
+                r"|cancel_delete"
                 r"|enable_hotel:)"
             ),
         )
@@ -4187,7 +4169,7 @@ def main():
     )
 
     # -----------------------------------------------------
-    # تشغيل مستقر
+    # التشغيل
     # -----------------------------------------------------
 
     logger.info(
@@ -4200,7 +4182,6 @@ def main():
         poll_interval=1.0,
         timeout=30,
         bootstrap_retries=-1,
-        close_loop=True,
     )
 
 
