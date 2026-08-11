@@ -1,506 +1,337 @@
-from datetime import datetime
-import json
 import os
-import sqlite3
-import telebot
-from telebot import types
+import logging
+import asyncio
+import threading
+from datetime import datetime
+import psycopg2
+from flask import Flask, request
 
-# === قراءة التوكن والآيدي من ملف الويب (config.json) ===
-CONFIG_FILE = "config.json"
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
+# إعداد السجلات (Logging)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-def load_config():
-  if os.path.exists(CONFIG_FILE):
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-      return json.load(f)
-  return {}
+# المتغيرات البيئية
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://user:password@localhost:5432/dbname")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
+PORT = int(os.getenv("PORT", "5000"))
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip()
 
+# قفل لتنفيذ عمليات قاعدة البيانات بأمان
+DB_LOCK = threading.Lock()
 
-config = load_config()
-TOKEN = config.get("token", "")
-ADMIN_ID = int(config.get("admin_id", 0))
+# إعداد تطبيق Flask للـ Webhook
+app = Flask(__name__)
 
-if not TOKEN or ADMIN_ID == 0:
-  print(
-      "⚠️ تنبيه: يرجى التأكد من حفظ التوكن وآيدي المدير من خلال صفحة الويب في ملف"
-      " config.json"
-  )
+# --- إدارة قاعدة البيانات ---
+def db():
+    return psycopg2.connect(DATABASE_URL)
 
-bot = telebot.TeleBot(TOKEN) if TOKEN else None
-
-
-# === إعداد قاعدة البيانات ===
 def init_db():
-  conn = sqlite3.connect("hotel_system.db")
-  cursor = conn.cursor()
-
-  # جدول الفنادق والحسابات
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS hotels (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            username TEXT UNIQUE,
-            password TEXT,
-            status TEXT DEFAULT 'active',
-            telegram_id INTEGER DEFAULT 0
-        )
-    """)
-
-  # جدول البريد (وارد وصادر)
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS mail (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            hotel_name TEXT,
-            message TEXT,
-            type TEXT,
-            date TEXT
-        )
-    """)
-
-  # إضافة الفنادق الافتراضية إذا كان الجدول فارغاً
-  cursor.execute("SELECT COUNT(*) FROM hotels")
-  if cursor.fetchone()[0] == 0:
-    default_hotels = [
-        "قرطبة",
-        "النور",
-        "النيل",
-        "سرمدا",
-        "الحميدية",
-        "برج التجارة",
-        "دريم لاند",
-    ]
-    for h in default_hotels:
-      cursor.execute(
-          "INSERT INTO hotels (name, username, password, status) VALUES (?,"
-          " ?, ?, ?)",
-          (h, f"user_{h}", "123456", "active"),
-      )
-
-  conn.commit()
-  conn.close()
-
+    """إنشاء الجداول الأساسية في PostgreSQL إذا لم تكن موجودة"""
+    with DB_LOCK:
+        with db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS hotels (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        location TEXT
+                    );
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS hotel_accounts (
+                        id SERIAL PRIMARY KEY,
+                        hotel_id INT REFERENCES hotels(id) ON DELETE CASCADE,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE
+                    );
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        id SERIAL PRIMARY KEY,
+                        hotel_name TEXT,
+                        user_id BIGINT UNIQUE,
+                        status TEXT DEFAULT 'active',
+                        last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS circulars (
+                        id SERIAL PRIMARY KEY,
+                        content TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS inbox (
+                        id SERIAL PRIMARY KEY,
+                        hotel_name TEXT,
+                        guest_data TEXT,
+                        status TEXT DEFAULT 'pending',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                conn.commit()
 
 init_db()
 
+# --- توليد ملفات PDF ---
+def generate_guest_pdf(guest_info: dict, filename: str = "guest_report.pdf"):
+    """توليد استمارة رسمية بصيغة PDF مع دعم الخطوط العربية"""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    import arabic_reshaper
+    from bidi.algorithm import get_display
 
-# === صفحة الترحيب والتحقق من الصلاحيات ===
-@bot.message_handler(commands=["start"])
-def send_welcome(message):
-  user_id = message.from_user.id
+    def ar(text):
+        if not text:
+            return ""
+        reshaped = arabic_reshaper.reshape(str(text))
+        return get_display(reshaped)
 
-  # آية قرآنية وسلام وترحيب
-  welcome_text = (
-      "**السلام عليكم ورحمة الله وبركاته**\n\n"
-      "﴿ *وَقُلِ اعْمَلُوا فَسَيَرَى اللَّهُ عَمَلَكُمْ وَرَسُولَهُ وَالْمُؤْمِنُونَ* ﴾\n\n"
-      "مرحباً بك، **معكم قسم معلومات الفنادق** 🏨\n"
-      "نظام الإدارة والخدمات الفندقية المتكامل."
-  )
+    # محاولة تسجيل خط عربي متوفر في النظام أو محلياً
+    font_name = "Helvetica"
+    font_paths = [
+        "Cairo-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"
+    ]
+    for path in font_paths:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont("ArabicFont", path))
+                font_name = "ArabicFont"
+                break
+            except Exception:
+                pass
 
-  # تحقق هل المستخدم هو المدير (مأخوذ من إعدادات الويب)
-  if user_id == ADMIN_ID:
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton(
-            "🏢 إدارة الفنادق", callback_data="admin_hotels"
-        ),
-        types.InlineKeyboardButton("👥 إدارة الجلسات", callback_data="admin_sessions"),
-        types.InlineKeyboardButton("📬 البريد (وارد وصادر)", callback_data="admin_mail"),
-        types.InlineKeyboardButton("📊 التقارير", callback_data="admin_reports"),
+    doc = SimpleDocTemplate(filename, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle(
+        'ArabicTitle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=18,
+        alignment=1,
+        textColor=colors.HexColor("#1A365D")
     )
-    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
-    bot.send_message(
-        message.chat.id,
-        "**أهلاً بك يا سيادة المدير، تفضل لوحة التحكم الخاصة بك:**",
-        reply_markup=markup,
-        parse_mode="Markdown",
+    
+    body_style = ParagraphStyle(
+        'ArabicBody',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=12,
+        alignment=2,
+        textColor=colors.HexColor("#2D3748")
     )
-    return
 
-  # التحقق مما إذا كان المستخدم فندقاً مسجلاً ودخل مسبقاً
-  conn = sqlite3.connect("hotel_system.db")
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT name, status FROM hotels WHERE telegram_id = ?", (user_id,)
-  )
-  hotel = cursor.fetchone()
-  conn.close()
+    story = [
+        Paragraph(ar("استمارة تسجيل نزيل رسمية"), title_style),
+        Spacer(1, 15),
+        Paragraph(ar(f"اسم النزيل: {guest_info.get('name', 'غير متوفر')}"), body_style),
+        Spacer(1, 10),
+        Paragraph(ar(f"اسم الأم: {guest_info.get('mother_name', 'غير متوفر')}"), body_style),
+        Spacer(1, 10),
+        Paragraph(ar(f"تاريخ الولادة: {guest_info.get('birth_date', 'غير متوفر')}"), body_style),
+        Spacer(1, 10),
+        Paragraph(ar(f"سبب الإقامة: {guest_info.get('reason', 'غير متوفر')}"), body_style),
+        Spacer(1, 15)
+    ]
 
-  if hotel:
-    hotel_name, status = hotel
-    if status == "disabled":
-      bot.send_message(
-          message.chat.id,
-          "❌ عذراً، تم تعطيل حسابك أو طردك من قبل الإدارة.",
-          parse_mode="Markdown",
-      )
-      return
+    try:
+        doc.build(story)
+        return filename
+    except Exception as e:
+        logger.error(f"Error generating PDF: {e}")
+        return None
 
-    # لوحة الفندق المسجل
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("📤 إرسال رسالة للإدارة", callback_data="hotel_send_mail"),
-        types.InlineKeyboardButton("🚪 تسجيل خروج", callback_data="hotel_logout"),
-    )
-    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
-    bot.send_message(
-        message.chat.id,
-        f"مرحباً بك في لوحة فندق: **{hotel_name}**",
-        reply_markup=markup,
-        parse_mode="Markdown",
-    )
-  else:
-    # مطالبة بتسجيل الدخول للفندق
-    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
-    msg = bot.send_message(
-        message.chat.id,
-        "🔐 يرجى إرسال اسم المستخدم وكلمة المرور الخاصة بفندقك بهذا الشكل:\n`اسم_المستخدم كلمة_المرور`",
-        parse_mode="Markdown",
-    )
-    bot.register_next_step_handler(msg, process_hotel_login)
+# --- واجهة وتوابع لوحة المدير ---
 
+def get_admin_main_menu():
+    """لوحة التحكم الرئيسية للمدير"""
+    keyboard = [
+        [InlineKeyboardButton("📋 طلبات النزلاء الواردة", callback_data="admin_inbox")],
+        [InlineKeyboardButton("🏨 إدارة الفنادق والحسابات", callback_data="admin_hotels")],
+        [InlineKeyboardButton("📢 الصادر والتعاميم", callback_data="admin_circulars")],
+        [InlineKeyboardButton("💻 الجلسات النشطة", callback_data="admin_sessions")],
+        [InlineKeyboardButton("📊 التقارير والإحصاءات", callback_data="admin_reports")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
-# === معالجة تسجيل دخول الفندق ===
-def process_hotel_login(message):
-  try:
-    data = message.text.split()
-    if len(data) < 2:
-      bot.send_message(
-          message.chat.id,
-          "⚠️ الصيغة غير صحيحة. أرسل هكذا: `username password`",
-          parse_mode="Markdown",
-      )
-      return
-
-    username, password = data[0], data[1]
-    user_id = message.from_user.id
-
-    conn = sqlite3.connect("hotel_system.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, name, status FROM hotels WHERE username = ? AND password = ?",
-        (username, password),
-    )
-    hotel = cursor.fetchone()
-
-    if hotel:
-      hotel_id, hotel_name, status = hotel
-      if status == "disabled":
-        bot.send_message(
-            message.chat.id,
-            "❌ هذا الحساب معطل من قبل الإدارة.",
-            parse_mode="Markdown",
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("عذراً، هذا الأمر مخصص للمدير فقط.")
+        return
+    
+    if update.message:
+        await update.message.reply_text(
+            "🎛 **لوحة تحكم الإدارة الرئيسية**\nاختر القسم المطلوب:",
+            reply_markup=get_admin_main_menu(),
+            parse_mode="Markdown"
         )
-        conn.close()
+    elif update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(
+            "🎛 **لوحة تحكم الإدارة الرئيسية**\nاختر القسم المطلوب:",
+            reply_markup=get_admin_main_menu(),
+            parse_mode="Markdown"
+        )
+
+# معالج قسم الجلسات النشطة
+async def show_active_sessions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    with DB_LOCK:
+        with db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT id, hotel_name, user_id, status, last_login FROM sessions ORDER BY last_login DESC;")
+                sessions = cursor.fetchall()
+                
+    if not sessions:
+        await query.edit_message_text(
+            "💻 **إدارة الجلسات النشطة**\n\nلا توجد جلسات مسجلة حالياً.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_back")]])
+        )
         return
 
-      # تثبيت الجلسة وربط الـ ID بالبوت
-      cursor.execute(
-          "UPDATE hotels SET telegram_id = ? WHERE id = ?", (user_id, hotel_id)
-      )
-      conn.commit()
-      conn.close()
+    keyboard = []
+    text = "💻 **إدارة الجلسات النشطة:**\nاختر الجلسة للتحكم بها (طرد أو تعطيل/تفعيل):\n\n"
+    
+    for s in sessions:
+        s_id, hotel_name, user_id, status, last_login = s
+        status_icon = "🟢 نشط" if status == "active" else "🔴 معطل"
+        text += f"🏨 {hotel_name} (ID: {user_id}) - {status_icon}\n"
+        
+        toggle_text = "🔒 تعطيل" if status == "active" else "🔓 تفعيل"
+        keyboard.append([
+            InlineKeyboardButton(f"{hotel_name} ({status_icon})", callback_data=f"noop_{s_id}")
+        ])
+        keyboard.append([
+            InlineKeyboardButton(toggle_text, callback_data=f"session_toggle_{s_id}"),
+            InlineKeyboardButton("❌ طرد نهائي", callback_data=f"session_kick_{s_id}")
+        ])
+        
+    keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="admin_back")])
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-      bot.send_message(
-          message.chat.id,
-          f"✅ تم تسجيل الدخول بنجاح لفندق **{hotel_name}**.\nستبقى مسجلاً في البوت حتى تقوم بتسجيل الخروج أو يتم طردك من الإدارة.",
-          parse_mode="Markdown",
-      )
-    else:
-      bot.send_message(
-          message.chat.id,
-          "❌ اسم المستخدم أو كلمة المرور غير صحيحة.",
-          parse_mode="Markdown",
-      )
-      conn.close()
-  except Exception as e:
-    bot.send_message(message.chat.id, f"حدث خطأ: {e}")
+async def handle_session_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    parts = data.split("_")
+    action = parts[1] # toggle أو kick
+    session_id = int(parts[2])
+    
+    with DB_LOCK:
+        with db() as conn:
+            with conn.cursor() as cursor:
+                if action == "kick":
+                    cursor.execute("DELETE FROM sessions WHERE id = %s;", (session_id,))
+                    conn.commit()
+                    await query.answer("تم طرد الجلسة بنجاح وحذفها.", show_alert=True)
+                elif action == "toggle":
+                    cursor.execute("SELECT status FROM sessions WHERE id = %s;", (session_id,))
+                    res = cursor.fetchone()
+                    if res:
+                        new_status = "disabled" if res[0] == "active" else "active"
+                        cursor.execute("UPDATE sessions SET status = %s WHERE id = %s;", (new_status, session_id))
+                        conn.commit()
+                        await query.answer(f"تم تغيير حالة الجلسة إلى: {new_status}", show_alert=True)
+                        
+    await show_active_sessions(update, context)
 
-
-# === إدارة أزرار لوحة تحكم المدير ===
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callbacks(call):
-  user_id = call.from_user.id
-
-  if call.data == "admin_hotels":
-    conn = sqlite3.connect("hotel_system.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT name, username, password, status FROM hotels")
-    hotels = cursor.fetchall()
-    conn.close()
-
-    text = "🏢 **قائمة الفنادق المسجلة:**\n\n"
-    for h in hotels:
-      text += (
-          f"📌 الفندق: **{h[0]}**\n👤 المستخدم: `{h[1]}`\n🔑 المرور: `{h[2]}`\nحالة"
-          f" الحساب: {h[3]}\n-------------------\n"
-      )
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("➕ إضافة فندق جديد", callback_data="add_hotel"),
-        types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_back"),
-    )
-    bot.edit_message_text(
-        text,
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup,
-        parse_mode="Markdown",
-    )
-
-  elif call.data == "add_hotel":
-    msg = bot.send_message(
-        call.message.chat.id,
-        "أدخل بيانات الفندق الجديد بهذا الشكل:\n`اسم_الفندق اسم_المستخدم كلمة_المرور`",
-        parse_mode="Markdown",
-    )
-    bot.register_next_step_handler(msg, save_new_hotel)
-
-  elif call.data == "admin_sessions":
-    conn = sqlite3.connect("hotel_system.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, status, telegram_id FROM hotels")
-    hotels = cursor.fetchall()
-    conn.close()
-
-    text = "👥 **إدارة جلسات الفنادق:**\nاختر فندقاً للتحكم بحالته (تعطيل/تفعيل/طرد):\n\n"
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for h in hotels:
-      markup.add(
-          types.InlineKeyboardButton(
-              f"فندق: {h[1]} ({h[2]})", callback_data=f"manage_session_{h[0]}"
-          )
-      )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_back"))
-    bot.edit_message_text(
-        text,
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup,
-        parse_mode="Markdown",
+# معالج قسم الصادر والتعاميم
+async def show_circulars_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("✍️ إرسال تعميم جديد لجميع الفنادق", callback_data="circular_new")],
+        [InlineKeyboardButton("📜 عرض التعاميم السابقة", callback_data="circular_list")],
+        [InlineKeyboardButton("🔙 رجوع", callback_data="admin_back")]
+    ]
+    
+    await query.edit_message_text(
+        "📢 **نظام الصادر والتعاميم الرسمية**\n\nقم باختيار الإجراء المطلوب:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
     )
 
-  elif call.data.startswith("manage_session_"):
-    hotel_id = call.data.split("_")[2]
-    conn = sqlite3.connect("hotel_system.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT name, status FROM hotels WHERE id = ?", (hotel_id,))
-    h = cursor.fetchone()
-    conn.close()
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton(
-            "✅ تفعيل", callback_data=f"set_status_{hotel_id}_active"
-        ),
-        types.InlineKeyboardButton(
-            "⚠️ تعطيل", callback_data=f"set_status_{hotel_id}_disabled"
-        ),
-        types.InlineKeyboardButton(
-            "🚫 طرد (إلغاء الجلسة)",
-            callback_data=f"set_status_{hotel_id}_kick",
-        ),
-        types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_sessions"),
-    )
-    bot.edit_message_text(
-        f"التحكم بالفندق: **{h[0]}**\nالحالة الحالية: {h[1]}",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup,
-        parse_mode="Markdown",
+# --- إعداد البوت والمسارات الأساسية ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "أهلاً بك في نظام إدارة معلومات الفنادق.\nيرجى تسجيل الدخول باستخدام حسابك المعتمد."
     )
 
-  elif call.data.startswith("set_status_"):
-    _, _, hotel_id, action = call.data.split("_")
-    conn = sqlite3.connect("hotel_system.db")
-    cursor = conn.cursor()
-    if action == "kick":
-      cursor.execute(
-          "UPDATE hotels SET status = 'active', telegram_id = 0 WHERE id = ?",
-          (hotel_id,),
-      )
-      msg_text = "🚫 تم طرد الفندق وإلغاء جلسته بنجاح."
-    else:
-      cursor.execute(
-          "UPDATE hotels SET status = ? WHERE id = ?", (action, hotel_id)
-      )
-      msg_text = f"✅ تم تحديث حالة الفندق إلى: {action}"
-    conn.commit()
-    conn.close()
-    bot.answer_callback_query(call.id, msg_text)
+# --- مسار الـ Webhook الخاص بـ Flask ---
+@app.route('/telegram/webhook', methods=['POST'])
+def webhook():
+    if request.method == "POST":
+        json_data = request.get_json(force=True)
+        update = Update.de_json(json_data, telegram_app.bot)
+        telegram_app.update_queue.put_nowil(update) if hasattr(telegram_app, 'update_queue') else asyncio.run_coroutine_threadsafe(
+            telegram_app.process_update(update), telegram_loop
+        )
+        return "OK", 200
+    return "Forbidden", 403
 
-  elif call.data == "admin_mail":
-    conn = sqlite3.connect("hotel_system.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT hotel_name, message, type, date FROM mail")
-    mails = cursor.fetchall()
-    conn.close()
+@app.route('/')
+def index():
+    return "Bot is running successfully!", 200
 
-    text = "📬 **سجل البريد (الوارد والصادر):**\n\n"
-    if not mails:
-      text += "لا توجد رسائل حالياً."
-    for m in mails:
-      text += (
-          f"🏨 الفندق: {m[0]}\nنوع البريد: {m[2]}\nالرسالة:"
-          f" {m[1]}\nالتاريخ: {m[3]}\n-------------------\n"
-      )
+# دالة تهيئة وبدء تشغيل البوت
+telegram_app = None
+telegram_loop = None
 
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_back"))
-    bot.edit_message_text(
-        text,
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup,
-        parse_mode="Markdown",
-    )
+def main():
+    global telegram_app, telegram_loop
+    telegram_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(telegram_loop)
 
-  elif call.data == "admin_reports":
-    today = datetime.now().strftime("%Y-%m-%d")
-    current_month = datetime.now().strftime("%Y-%m")
+    telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-    conn = sqlite3.connect("hotel_system.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM hotels")
-    total_hotels = cursor.fetchone()[0]
+    # تسجيل الهاندلرز الأساسية والإدارية
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(CommandHandler("admin", admin_panel))
+    
+    # معالجات الأزرار الإدارية
+    telegram_app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_back$"))
+    telegram_app.add_handler(CallbackQueryHandler(show_active_sessions, pattern="^admin_sessions$"))
+    telegram_app.add_handler(CallbackQueryHandler(handle_session_action, pattern="^session_(toggle|kick)_"))
+    telegram_app.add_handler(CallbackQueryHandler(show_circulars_menu, pattern="^admin_circulars$"))
 
-    cursor.execute("SELECT COUNT(*) FROM hotels WHERE telegram_id != 0")
-    active_sessions = cursor.fetchone()[0]
+    # إعداد الـ Webhook أو التشغيل المحلي
+    if RENDER_EXTERNAL_URL:
+        webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/telegram/webhook"
+        telegram_loop.run_until_complete(telegram_app.bot.set_webhook(url=webhook_url))
+        logger.info(f"Webhook set to: {webhook_url}")
+    
+    # تشغيل بوت تيليجرام في الخلفية
+    telegram_app.run_polling()
 
-    cursor.execute(
-        "SELECT COUNT(*) FROM mail WHERE date LIKE ?", (f"{current_month}%",)
-    )
-    monthly_mails = cursor.fetchone()[0]
-    conn.close()
-
-    text = (
-        f"📊 **التقارير والإحصائيات:**\n\n"
-        f"📅 **التقرير اليومي ({today}):**\n"
-        f"- إجمالي الفنادق: {total_hotels}\n"
-        f"- الجلسات النشطة حالياً: {active_sessions}\n\n"
-        f"📈 **التقرير الشهري ({current_month}):**\n"
-        f"- إجمالي مراسلات البريد لهذا الشهر: {monthly_mails}\n"
-    )
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_back"))
-    bot.edit_message_text(
-        text,
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup,
-        parse_mode="Markdown",
-    )
-
-  elif call.data == "admin_back":
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton(
-            "🏢 إدارة الفنادق", callback_data="admin_hotels"
-        ),
-        types.InlineKeyboardButton("👥 إدارة الجلسات", callback_data="admin_sessions"),
-        types.InlineKeyboardButton("📬 البريد (وارد وصادر)", callback_data="admin_mail"),
-        types.InlineKeyboardButton("📊 التقارير", callback_data="admin_reports"),
-    )
-    bot.edit_message_text(
-        "**لوحة التحكم الرئيسية للمدير:**",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup,
-        parse_mode="Markdown",
-    )
-
-  elif call.data == "hotel_send_mail":
-    msg = bot.send_message(
-        call.message.chat.id, "أرسل محتوى الرسالة ليتم إرسالها إلى إدارة البوت (وارد وصادر):"
-    )
-    bot.register_next_step_handler(msg, save_hotel_mail)
-
-  elif call.data == "hotel_logout":
-    user_id = call.from_user.id
-    conn = sqlite3.connect("hotel_system.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE hotels SET telegram_id = 0 WHERE telegram_id = ?", (user_id,)
-    )
-    conn.commit()
-    conn.close()
-    bot.answer_callback_query(call.id, "تم تسجيل الخروج بنجاح.")
-    bot.send_message(
-        call.message.chat.id,
-        "🚪 لقد قمت بتسجيل الخروج. أرسل /start لتسجيل الدخول مرة أخرى.",
-    )
-
-
-# === حفظ فندق جديد من قبل المدير ===
-def save_new_hotel(message):
-  try:
-    data = message.text.split()
-    if len(data) < 3:
-      bot.send_message(
-          message.chat.id,
-          "⚠️ الصيغة خطأ. أرسل هكذا: `اسم_الفندق اسم_المستخدم كلمة_المرور`",
-          parse_mode="Markdown",
-      )
-      return
-
-    name, username, password = data[0], data[1], data[2]
-    conn = sqlite3.connect("hotel_system.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO hotels (name, username, password, status) VALUES (?,"
-        " ?, ?, 'active')",
-        (name, username, password),
-    )
-    conn.commit()
-    conn.close()
-    bot.send_message(
-        message.chat.id,
-        f"✅ تم إضافة الفندق **{name}** بنجاح.",
-        parse_mode="Markdown",
-    )
-  except Exception as e:
-    bot.send_message(
-        message.chat.id,
-        f"❌ حدث خطأ (قد يكون اسم المستخدم موجوداً مسبقاً): {e}",
-    )
-
-
-# === حفظ رسائل البريد للفنادق ===
-def save_hotel_mail(message):
-  user_id = message.from_user.id
-  text = message.text
-  date_now = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-  conn = sqlite3.connect("hotel_system.db")
-  cursor = conn.cursor()
-  cursor.execute("SELECT name FROM hotels WHERE telegram_id = ?", (user_id,))
-  hotel = cursor.fetchone()
-
-  if hotel:
-    hotel_name = hotel[0]
-    cursor.execute(
-        "INSERT INTO mail (hotel_name, message, type, date) VALUES (?, ?, ?,"
-        " ?)",
-        (hotel_name, text, "وارد", date_now),
-    )
-    conn.commit()
-    conn.close()
-    bot.send_message(
-        message.chat.id, "✅ تم إرسال الرسالة إلى إدارة البوت بنجاح (بريد وارد)."
-    )
-  else:
-    conn.close()
-    bot.send_message(message.chat.id, "❌ حدث خطأ، يرجى تسجيل الدخول أولاً.")
-
-
-# === تشغيل البوت ===
-if __name__ == "__main__":
-  if bot:
-    print("البوت يعمل الآن بنجاح...")
-    bot.infinity_polling()
-  else:
-    print(
-        "❌ خطأ: يرجى التأكد من إنشاء ملف config.json وتعبئته بالتوكن والآيدي من"
-        " صفحة الويب."
-    )
+if __name__ == '__main__':
+    # تشغيل سيرفر Flask بالتزامن مع البوت إذا لزم الأمر، أو الاعتماد على WSGI (مثل Gunicorn)
+    app.run(host="0.0.0.0", port=PORT)
