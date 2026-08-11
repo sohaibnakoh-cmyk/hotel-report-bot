@@ -198,7 +198,7 @@ def pdf_text(text):
 
 
 # =========================================================
-# قاعدة البيانات (PostgreSQL) مع نظام إعادة المحاولة
+# قاعدة البيانات (PostgreSQL) مع نظام الهجرة التلقائية
 # =========================================================
 
 def db():
@@ -227,8 +227,11 @@ def init_db():
                                 name TEXT UNIQUE NOT NULL,
                                 enabled INT DEFAULT 1,
                                 created_at TEXT NOT NULL
-                            )
+                            );
                         """)
+
+                        # ضمان وجود الأعمدة القديمة/الجديدة لتجنب أي تعارض
+                        cur.execute("ALTER TABLE hotels ADD COLUMN IF NOT EXISTS enabled INT DEFAULT 1;")
 
                         cur.execute("""
                             CREATE TABLE IF NOT EXISTS hotel_accounts (
@@ -240,7 +243,7 @@ def init_db():
                                 enabled INT DEFAULT 1,
                                 created_at TEXT NOT NULL,
                                 FOREIGN KEY (hotel_id) REFERENCES hotels(id) ON DELETE CASCADE
-                            )
+                            );
                         """)
 
                         cur.execute("""
@@ -261,7 +264,7 @@ def init_db():
                                 front_photo TEXT,
                                 back_photo TEXT,
                                 created_at TEXT
-                            )
+                            );
                         """)
 
                         cur.execute("""
@@ -272,7 +275,7 @@ def init_db():
                                 is_read INT DEFAULT 0,
                                 created_at TEXT,
                                 FOREIGN KEY (guest_id) REFERENCES guests(id) ON DELETE CASCADE
-                            )
+                            );
                         """)
 
                         cur.execute("""
@@ -281,7 +284,7 @@ def init_db():
                                 title TEXT,
                                 content TEXT,
                                 created_at TEXT
-                            )
+                            );
                         """)
 
                         cur.execute("""
@@ -295,12 +298,12 @@ def init_db():
                                 temp_data TEXT,
                                 updated_at TEXT,
                                 FOREIGN KEY (hotel_account_id) REFERENCES hotel_accounts(id) ON DELETE CASCADE
-                            )
+                            );
                         """)
 
                         for hotel in DEFAULT_HOTELS:
                             cur.execute(
-                                "INSERT INTO hotels (name, enabled, created_at) VALUES (%s, 1, %s) ON CONFLICT (name) DO NOTHING",
+                                "INSERT INTO hotels (name, enabled, created_at) VALUES (%s, 1, %s) ON CONFLICT (name) DO NOTHING;",
                                 (hotel, now())
                             )
 
