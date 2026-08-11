@@ -1460,7 +1460,7 @@ async def monthly_report(update, context):
 
 
 # =========================================================
-# Callback Handler
+# Callback Handler (مصحح ومفعل بالكامل)
 # =========================================================
 
 async def callback_handler(update, context):
@@ -1500,19 +1500,19 @@ async def callback_handler(update, context):
             context.user_data.clear()
             await query.edit_message_text("👑 **لوحة تحكم المدير**", reply_markup=admin_menu())
             return
-        if data == "admin_add_account":
+        elif data == "admin_add_account":
             await admin_add_account(update, context)
             return
-        if data == "admin_change_pass":
+        elif data == "admin_change_pass":
             await admin_change_pass_list(update, context)
             return
-        if data == "admin_kick_list":
+        elif data == "admin_kick_list":
             await admin_kick_list(update, context)
             return
-        if data.startswith("changepass_"):
+        elif data.startswith("changepass_"):
             await admin_change_pass_select(update, context)
             return
-        if data.startswith("kick_"):
+        elif data.startswith("kick_"):
             try:
                 acc_id = int(data.split("_", 1)[1])
                 clear_session_by_hotel_account(acc_id)
@@ -1520,37 +1520,37 @@ async def callback_handler(update, context):
             except Exception:
                 await query.edit_message_text("❌ حدث خطأ أثناء طرد الفندق.", reply_markup=admin_menu())
             return
-        if data == "admin_list_accounts":
+        elif data == "admin_list_accounts":
             await admin_list_accounts(update, context)
             return
-        if data == "admin_disable":
+        elif data == "admin_disable":
             await disable_accounts(update, context)
             return
-        if data == "admin_enable":
+        elif data == "admin_enable":
             await enable_accounts(update, context)
             return
-        if data == "admin_inbox":
+        elif data == "admin_inbox":
             await admin_inbox(update, context)
             return
-        if data == "admin_circulars":
+        elif data == "admin_circulars":
             await admin_circulars(update, context)
             return
-        if data == "admin_new_circular":
+        elif data == "admin_new_circular":
             await admin_new_circular_start(update, context)
             return
-        if data == "report_daily":
+        elif data == "report_daily":
             await daily_report(update, context)
             return
-        if data == "report_monthly":
+        elif data == "report_monthly":
             await monthly_report(update, context)
             return
-        if data.startswith("selecthotel_"):
+        elif data.startswith("selecthotel_"):
             await select_hotel(update, context)
             return
-        if data == "add_new_hotel":
+        elif data == "add_new_hotel":
             await add_new_hotel(update, context)
             return
-        if data.startswith("disable_"):
+        elif data.startswith("disable_"):
             try:
                 acc_id = int(data.split("_", 1)[1])
                 set_hotel_account_status(acc_id, False)
@@ -1558,7 +1558,7 @@ async def callback_handler(update, context):
             except Exception:
                 await query.edit_message_text("❌ حدث خطأ.", reply_markup=admin_menu())
             return
-        if data.startswith("enable_"):
+        elif data.startswith("enable_"):
             try:
                 acc_id = int(data.split("_", 1)[1])
                 set_hotel_account_status(acc_id, True)
@@ -1566,10 +1566,10 @@ async def callback_handler(update, context):
             except Exception:
                 await query.edit_message_text("❌ حدث خطأ.", reply_markup=admin_menu())
             return
-        if data.startswith("inbox_"):
+        elif data.startswith("inbox_"):
             await open_inbox(update, context)
             return
-        if data.startswith("resend_"):
+        elif data.startswith("resend_"):
             await resend_pdf(update, context)
             return
 
@@ -1578,17 +1578,17 @@ async def callback_handler(update, context):
         if data == "guest_start":
             await start_guest(update, context)
             return
-        if data == "guest_preview":
+        elif data == "guest_preview":
             await show_preview(update, context)
             return
-        if data == "guest_send":
+        elif data == "guest_send":
             await send_guest_to_admin(update, context)
             return
-        if data == "hotel_home":
+        elif data == "hotel_home":
             context.user_data["state"] = "hotel_home"
             await query.edit_message_text("🏨 **لوحة تحكم الفندق**", reply_markup=hotel_menu())
             return
-        if data == "hotel_logout":
+        elif data == "hotel_logout":
             clear_session(user.id)
             context.user_data.clear()
             await query.edit_message_text("🚪 تم تسجيل الخروج بنجاح.", reply_markup=welcome_keyboard())
