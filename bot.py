@@ -255,7 +255,6 @@ def init_db():
                 )
             """)
 
-            # جدول الجلسات الدائمة لتفادي الخروج الدائم
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     user_id INTEGER PRIMARY KEY,
@@ -293,7 +292,6 @@ def get_session(telegram_user_id):
         if not row:
             return None
         
-        # التأكد من عدم تعطيل الحساب من قبل المدير
         if row["hotel_account_id"]:
             acc = conn.execute("SELECT enabled FROM hotel_accounts WHERE id = ?", (row["hotel_account_id"],)).fetchone()
             if not acc or acc["enabled"] != 1:
@@ -401,6 +399,25 @@ def create_hotel_account(hotel_name, username, password):
         except sqlite3.IntegrityError:
             conn.rollback()
             return False, "اسم المستخدم مستخدم مسبقاً."
+        except Exception as e:
+            conn.rollback()
+            return False, str(e)
+        finally:
+            conn.close()
+
+def update_hotel_password(account_id, new_password):
+    new_password = new_password.strip()
+    if not new_password or len(new_password) < 4:
+        return False, "كلمة المرور يجب أن تكون 4 خانات على الأقل."
+
+    password_hash = hash_password(new_password)
+
+    with DB_LOCK:
+        conn = db()
+        try:
+            conn.execute("UPDATE hotel_accounts SET password_hash = ? WHERE id = ?", (password_hash, account_id))
+            conn.commit()
+            return True, "تم تغيير كلمة المرور بنجاح."
         except Exception as e:
             conn.rollback()
             return False, str(e)
@@ -546,15 +563,13 @@ def format_report(title, data):
 
 
 # =========================================================
-# PDF
+# PDF مع نظام التصحيح التلقائي المباشر (Automatic Fallback)
 # =========================================================
 
-def make_pdf(guest):
-    filename = f"guest_{guest['id']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+def generate_pdf_document(guest, include_photos=True):
+    guest_id = guest["id"] if isinstance(guest, (dict, sqlite3.Row)) else 0
+    filename = f"guest_{guest_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     path = PDF_DIR / filename
-
-    if not ARABIC_FONT_READY:
-        raise RuntimeError("خط اللغة العربية غير متوفر.")
 
     doc = SimpleDocTemplate(
         str(path),
@@ -565,33 +580,47 @@ def make_pdf(guest):
 
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle("ArabicTitle", parent=styles["Title"], fontName=ARABIC_FONT_BOLD_NAME, alignment=TA_RIGHT, fontSize=18, leading=24)
-    subtitle_style = ParagraphStyle("ArabicSubtitle", parent=styles["Normal"], fontName=ARABIC_FONT_NAME, alignment=TA_RIGHT, fontSize=10, leading=16)
-    center_style = ParagraphStyle("ArabicCenter", parent=styles["Normal"], fontName=ARABIC_FONT_NAME, alignment=TA_CENTER, fontSize=10, leading=16)
-    label_style = ParagraphStyle("ArabicLabel", parent=styles["Normal"], fontName=ARABIC_FONT_BOLD_NAME, alignment=TA_RIGHT, fontSize=9, leading=14)
-    value_style = ParagraphStyle("ArabicValue", parent=styles["Normal"], fontName=ARABIC_FONT_NAME, alignment=TA_RIGHT, fontSize=10, leading=15)
+    font_regular = ARABIC_FONT_NAME if ARABIC_FONT_READY else "Helvetica"
+    font_bold = ARABIC_FONT_BOLD_NAME if ARABIC_FONT_READY else "Helvetica-Bold"
+
+    title_style = ParagraphStyle("ArabicTitle", parent=styles["Title"], fontName=font_bold, alignment=TA_RIGHT, fontSize=18, leading=24)
+    subtitle_style = ParagraphStyle("ArabicSubtitle", parent=styles["Normal"], fontName=font_regular, alignment=TA_RIGHT, fontSize=10, leading=16)
+    center_style = ParagraphStyle("ArabicCenter", parent=styles["Normal"], fontName=font_regular, alignment=TA_CENTER, fontSize=10, leading=16)
+    label_style = ParagraphStyle("ArabicLabel", parent=styles["Normal"], fontName=font_bold, alignment=TA_RIGHT, fontSize=9, leading=14)
+    value_style = ParagraphStyle("ArabicValue", parent=styles["Normal"], fontName=font_regular, alignment=TA_RIGHT, fontSize=10, leading=15)
+
+    def g(key):
+        if isinstance(guest, sqlite3.Row):
+            try:
+                val = guest[key]
+                return str(val) if val is not None else ""
+            except IndexError:
+                return ""
+        elif isinstance(guest, dict):
+            return str(guest.get(key, ""))
+        return ""
 
     story = [
         Paragraph(pdf_text("نظام إدارة معلومات الفنادق"), title_style),
         Paragraph(pdf_text("استمارة بيانات نزيل — تقرير رسمي"), subtitle_style),
-        Paragraph(pdf_text(f"رقم التقرير: HR-{guest['id']:06d}"), center_style),
+        Paragraph(pdf_text(f"رقم التقرير: HR-{guest_id:06d}"), center_style),
         Spacer(1, 10)
     ]
 
     raw_data = [
         ["البيان", "المعلومات"],
-        ["الاسم الثلاثي", guest["full_name"]],
-        ["اسم الأم", guest["mother_name"]],
-        ["مكان وتاريخ الولادة", guest["birth_place_date"]],
-        ["السكن الأصلي", guest["original_residence"]],
-        ["المحافظة", guest["governorate"]],
-        ["اسم الفندق", guest["hotel_name"]],
-        ["منطقة الفندق", guest["hotel_area"]],
-        ["سبب الإقامة", guest["stay_reason"]],
-        ["تاريخ النزول", guest["check_in_date"]],
-        ["مدة الإقامة", guest["stay_duration"]],
-        ["ملاحظات عامة", guest["notes"]],
-        ["تاريخ التسجيل", guest["created_at"]],
+        ["الاسم الثلاثي", g("full_name")],
+        ["اسم الأم", g("mother_name")],
+        ["مكان وتاريخ الولادة", g("birth_place_date")],
+        ["السكن الأصلي", g("original_residence")],
+        ["المحافظة", g("governorate")],
+        ["اسم الفندق", g("hotel_name")],
+        ["منطقة الفندق", g("hotel_area")],
+        ["سبب الإقامة", g("stay_reason")],
+        ["تاريخ النزول", g("check_in_date")],
+        ["مدة الإقامة", g("stay_duration")],
+        ["ملاحظات عامة", g("notes")],
+        ["تاريخ التسجيل", g("created_at")],
     ]
 
     formatted = []
@@ -615,29 +644,42 @@ def make_pdf(guest):
     story.append(table)
     story.append(Spacer(1, 10))
 
-    # الصور
-    for side_key, title_str in [("front_photo", "الهوية الشخصية — الوجه الأمامي"), ("back_photo", "الهوية الشخصية — الوجه الخلفي")]:
-        img_p = guest.get(side_key)
-        if img_p and Path(img_p).exists():
-            try:
-                img = PILImage.open(img_p)
-                img.thumbnail((900, 600))
-                temp_p = PHOTO_DIR / f"pdf_{side_key}_{guest['id']}.jpg"
-                img.convert("RGB").save(temp_p, "JPEG", quality=90)
-                story.append(KeepTogether([
-                    Paragraph(pdf_text(title_str), subtitle_style),
-                    Spacer(1, 4),
-                    RLImage(str(temp_p), width=75 * mm, height=50 * mm),
-                    Spacer(1, 8)
-                ]))
-            except Exception:
-                logger.exception("فشل تضمين الصورة بالـ PDF")
+    if include_photos:
+        for side_key, title_str in [("front_photo", "الهوية الشخصية — الوجه الأمامي"), ("back_photo", "الهوية الشخصية — الوجه الخلفي")]:
+            img_p = g(side_key)
+            if img_p and Path(img_p).exists():
+                try:
+                    with PILImage.open(img_p) as img:
+                        img = img.convert("RGB")
+                        temp_p = PHOTO_DIR / f"temp_{side_key}_{guest_id}_{datetime.now().strftime('%H%M%S%f')}.jpg"
+                        img.save(temp_p, "JPEG", quality=85)
+                        
+                        story.append(KeepTogether([
+                            Paragraph(pdf_text(title_str), subtitle_style),
+                            Spacer(1, 4),
+                            RLImage(str(temp_p), width=75 * mm, height=50 * mm),
+                            Spacer(1, 8)
+                        ]))
+                except Exception as e:
+                    logger.warning(f"⚠️ تصحيح تلقائي: تعذر تضمين صورة {side_key}: {e}")
 
     story.append(Spacer(1, 10))
     story.append(Paragraph(pdf_text("تم إنشاء هذا التقرير إلكترونياً بواسطة نظام إدارة معلومات الفنادق."), center_style))
 
     doc.build(story)
     return str(path)
+
+
+def make_pdf(guest):
+    try:
+        return generate_pdf_document(guest, include_photos=True)
+    except Exception as primary_error:
+        logger.error(f"⚠️ فشل توليد الـ PDF بالصور: {primary_error}. جاري التصحيح التلقائي المباشر...")
+        try:
+            return generate_pdf_document(guest, include_photos=False)
+        except Exception as fallback_error:
+            logger.critical(f"❌ فشل التصحيح التلقائي للـ PDF: {fallback_error}")
+            raise fallback_error
 
 
 # =========================================================
@@ -649,6 +691,7 @@ def admin_menu():
     inbox_text = f"📥 الوارد ({count})" if count else "📥 الوارد"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🏨 إضافة حساب فندق", callback_data="admin_add_account")],
+        [InlineKeyboardButton("🔑 تغيير كلمة مرور حساب", callback_data="admin_change_pass")],
         [InlineKeyboardButton("📋 حسابات الفنادق", callback_data="admin_list_accounts")],
         [InlineKeyboardButton("🔴 تعطيل حساب", callback_data="admin_disable"),
          InlineKeyboardButton("🟢 تفعيل حساب", callback_data="admin_enable")],
@@ -688,7 +731,6 @@ async def start(update, context):
 
     context.user_data.clear()
 
-    # الآية الكريمة المضافة والترحيب
     quran_msg = (
         "✨ *بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ*\n"
         "﴿ وَتَعَاوَنُوا عَلَى الْبِرِّ وَالتَّقْوَى ﴾\n\n"
@@ -707,7 +749,6 @@ async def start(update, context):
         )
         return
 
-    # التحقق مما إذا كان الفندق يملك جلسة مسجلة سابقاً
     session = get_session(user.id)
     if session:
         await update.message.reply_text(
@@ -752,21 +793,25 @@ async def hotel_login(update, context):
 
 
 # =========================================================
-# معالجة بيانات النزلاء
+# معالجة بيانات النزلاء والأسئلة الإجبارية مع الأمثلة
 # =========================================================
 
 GUEST_STEPS = [
-    ("full_name", "1️⃣ الاسم الثلاثي:"),
-    ("mother_name", "2️⃣ اسم الأم:"),
-    ("birth_place_date", "3️⃣ مكان وتاريخ الولادة:"),
-    ("original_residence", "4️⃣ السكن الأصلي:"),
-    ("governorate", "5️⃣ المحافظة:"),
-    ("hotel_area", "6️⃣ منطقة الفندق:"),
-    ("stay_reason", "7️⃣ سبب الإقامة:"),
-    ("check_in_date", "8️⃣ تاريخ النزول:"),
-    ("stay_duration", "9️⃣ مدة الإقامة:"),
-    ("notes", "🔟 ملاحظات عامة:")
+    ("full_name", "1️⃣ الاسم الثلاثي للنزيل:", "💡 *مثال:* أحمد محمد العلي"),
+    ("mother_name", "2️⃣ اسم الأم الثلاثي:", "💡 *مثال:* فاطمة خليل المحمود"),
+    ("birth_place_date", "3️⃣ مكان وتاريخ الولادة:", "💡 *مثال:* دمشق - 1995/04/12"),
+    ("original_residence", "4️⃣ مكان السكن الأصلي بالتفصيل:", "💡 *مثال:* حلب - حي الشهباء - شارع النيل"),
+    ("governorate", "5️⃣ المحافظة التابع لها:", "💡 *مثال:* إدلب (أو دمشق، حلب...)"),
+    ("hotel_area", "6️⃣ المنطقة أو الحي التابع له الفندق:", "💡 *مثال:* وسط المدينة / المربع الأمني"),
+    ("stay_reason", "7️⃣ سبب الإقامة في الفندق:", "💡 *مثال:* علاج طبي / عمل تجاري / السياحة"),
+    ("check_in_date", "8️⃣ تاريخ ووقت النزول بالفندق:", "💡 *مثال:* 2026/08/11 الساعة 02:00 ظهراً"),
+    ("stay_duration", "9️⃣ مدة الإقامة المتوقعة:", "💡 *مثال:* 3 أيام / أسبوع واحد"),
+    ("notes", "🔟 ملاحظات عامة (أو اكتب 'لا يوجد' إن لم تكن هناك ملاحظات):", "💡 *مثال:* لا يوجد / نزيل معه مرافق")
 ]
+
+def format_step_prompt(step_idx):
+    _, question, example = GUEST_STEPS[step_idx]
+    return f"{question}\n\n{example}\n\n🔴 *تنبيه:* الإجابة على هذا السؤال إجبارية ولا يمكن تخطيه."
 
 async def start_guest(update, context):
     query = update.callback_query
@@ -781,7 +826,7 @@ async def start_guest(update, context):
     context.user_data["guest_step"] = 0
     context.user_data["state"] = "guest_data"
 
-    await query.edit_message_text(GUEST_STEPS[0][1], reply_markup=back_button())
+    await query.edit_message_text(format_step_prompt(0), parse_mode="Markdown", reply_markup=back_button())
 
 def guest_preview_text(guest):
     return (
@@ -828,7 +873,6 @@ async def message_handler(update, context):
     text = (update.message.text or "").strip()
     state = context.user_data.get("state")
 
-    # 1. تسجيل دخول الفندق - اسم المستخدم
     if state == "hotel_username":
         if not text:
             await update.message.reply_text("❌ أرسل اسم المستخدم.")
@@ -838,7 +882,6 @@ async def message_handler(update, context):
         await update.message.reply_text("🔐 أرسل كلمة المرور:", reply_markup=back_button())
         return
 
-    # 2. تسجيل دخول الفندق - كلمة المرور
     if state == "hotel_password":
         username = context.user_data.get("login_username", "")
         row, error = login_hotel(username, text)
@@ -847,8 +890,6 @@ async def message_handler(update, context):
             return
 
         context.user_data.clear()
-        
-        # حفظ الجلسة الدائمة في DB حتى لا تنتهي أبدأ
         save_session(user.id, row["id"], row["hotel_id"], row["hotel_name"], row["username"], "hotel_home")
 
         await update.message.reply_text(
@@ -862,15 +903,19 @@ async def message_handler(update, context):
         )
         return
 
-    # 3. إدخال بيانات النزيل
     session = get_session(user.id)
     if session:
         if state == "guest_data":
             step = context.user_data.get("guest_step", 0)
             if step < len(GUEST_STEPS):
-                key, _ = GUEST_STEPS[step]
-                if not text:
-                    await update.message.reply_text("❌ لا يمكن ترك الحقل فارغاً.")
+                key, _, _ = GUEST_STEPS[step]
+
+                if not text or len(text) < 2:
+                    await update.message.reply_text(
+                        "⚠️ *إجابة غير مقبولة!*\n"
+                        "الجواب على هذا السؤال إجباري، يرجى كتابة إجابة واضحة وصحيحة للمتابعة.",
+                        parse_mode="Markdown"
+                    )
                     return
 
                 context.user_data.setdefault("guest", {})[key] = text
@@ -878,15 +923,25 @@ async def message_handler(update, context):
                 context.user_data["guest_step"] = step
 
                 if step < len(GUEST_STEPS):
-                    await update.message.reply_text(GUEST_STEPS[step][1], reply_markup=back_button())
+                    await update.message.reply_text(format_step_prompt(step), parse_mode="Markdown", reply_markup=back_button())
                     return
 
                 context.user_data["state"] = "front_photo"
-                await update.message.reply_text("1️⃣1️⃣ أرسل صورة الهوية الشخصية (الجهة الأمامية):", reply_markup=back_button())
+                await update.message.reply_text(
+                    "1️⃣1️⃣ أرسل صورة الهوية الشخصية (الجهة الأمامية):\n\n"
+                    "💡 *مثال:* قم بتمويه البيانات الحساسة إن أردت ولكن يجب أن تكون الصورة واضحة.\n\n"
+                    "🔴 *تنبيه:* رفع الصورة إجباري للمتابعة.",
+                    parse_mode="Markdown",
+                    reply_markup=back_button()
+                )
                 return
 
         if state in ["front_photo", "back_photo"]:
-            await update.message.reply_text("📷 يرجى إرسال صورة الهوية كـ (صورة) وليس كنص.")
+            await update.message.reply_text(
+                "⚠️ *رفع الصورة إجباري!*\n"
+                "يرجى إرسال الصورة كملف صورة وليس كنص للمتابعة.",
+                parse_mode="Markdown"
+            )
             return
 
     await update.message.reply_text(
@@ -910,7 +965,14 @@ async def photo_handler(update, context):
         path = await save_photo(update, context, "front")
         context.user_data.setdefault("guest", {})["front_photo"] = path
         context.user_data["state"] = "back_photo"
-        await update.message.reply_text("✅ تم استلام الوجه الأمامي.\n\n1️⃣2️⃣ أرسل الآن صورة الهوية (الجهة الخلفية):", reply_markup=back_button())
+        await update.message.reply_text(
+            "✅ تم استلام الوجه الأمامي.\n\n"
+            "1️⃣2️⃣ أرسل الآن صورة الهوية (الجهة الخلفية):\n\n"
+            "💡 *مثال:* صورة كاملة وواضحة للوجه الخلفي لبطاقة الهوية.\n\n"
+            "🔴 *تنبيه:* رفع الصورة الخلفية إجباري.",
+            parse_mode="Markdown",
+            reply_markup=back_button()
+        )
         return
 
     if state == "back_photo":
@@ -963,8 +1025,8 @@ async def send_guest_to_admin(update, context):
     try:
         pdf_path = make_pdf(row)
     except Exception:
-        logger.exception("فشل إنشاء PDF")
-        await query.edit_message_text("❌ تم الحفظ لكن حدث خطأ أثناء توليد ملف PDF.", reply_markup=hotel_menu())
+        logger.exception("فشل إنشاء PDF حتى بعد التصحيح التلقائي")
+        await query.edit_message_text("❌ حدث خطأ في النظام أثناء إنشاء التقرير.", reply_markup=hotel_menu())
         return
 
     try:
@@ -1138,7 +1200,7 @@ async def resend_pdf(update, context):
 
 
 # =========================================================
-# معالجة إضافة وإدارة الحسابات
+# معالجة إضافة وتعديل وإدارة الحسابات (إدارياً)
 # =========================================================
 
 async def admin_add_account(update, context):
@@ -1156,6 +1218,59 @@ async def admin_add_account(update, context):
     buttons.append([InlineKeyboardButton("↩️ رجوع", callback_data="admin_home")])
 
     await query.edit_message_text("🏨 **إنشاء حساب فندق**\n\nاختر الفندق المراد إنشاء حساب له:", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def admin_change_pass_list(update, context):
+    query = update.callback_query
+    if not is_admin(update.effective_user.id):
+        return
+
+    context.user_data.clear()
+    accounts = get_hotel_accounts()
+    if not accounts:
+        await query.edit_message_text("🔑 لا توجد حسابات فنادق لتغيير كلمة مرورها.", reply_markup=admin_menu())
+        return
+
+    buttons = []
+    for acc in accounts:
+        buttons.append([InlineKeyboardButton(f"🔑 {acc['hotel_name']} ({acc['username']})", callback_data=f"changepass_{acc['id']}")])
+
+    buttons.append([InlineKeyboardButton("↩️ رجوع", callback_data="admin_home")])
+    await query.edit_message_text("🔑 **اختر الحساب المراد تغيير كلمة المرور له:**", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def admin_change_pass_select(update, context):
+    query = update.callback_query
+    if not is_admin(update.effective_user.id):
+        return
+
+    try:
+        acc_id = int(query.data.split("_", 1)[1])
+    except Exception:
+        return
+
+    conn = db()
+    try:
+        row = conn.execute("SELECT * FROM hotel_accounts WHERE id = ?", (acc_id,)).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        await query.edit_message_text("❌ الحساب غير موجود.", reply_markup=admin_menu())
+        return
+
+    context.user_data.clear()
+    context.user_data["edit_account_id"] = row["id"]
+    context.user_data["edit_account_username"] = row["username"]
+    context.user_data["edit_account_hotel"] = row["hotel_name"]
+    context.user_data["state"] = "admin_new_password_only"
+
+    await query.edit_message_text(
+        f"🔑 **تعديل كلمة المرور لحساب:**\n\n"
+        f"🏨 **الفندق:** {row['hotel_name']}\n"
+        f"👤 **اسم المستخدم:** `{row['username']}`\n\n"
+        "أرسل كلمة المرور الجديدة لهذا الحساب الآن:",
+        parse_mode="Markdown",
+        reply_markup=back_button()
+    )
 
 async def select_hotel(update, context):
     query = update.callback_query
@@ -1283,6 +1398,12 @@ async def callback_handler(update, context):
         if data == "admin_add_account":
             await admin_add_account(update, context)
             return
+        if data == "admin_change_pass":
+            await admin_change_pass_list(update, context)
+            return
+        if data.startswith("changepass_"):
+            await admin_change_pass_select(update, context)
+            return
         if data == "admin_list_accounts":
             await admin_list_accounts(update, context)
             return
@@ -1362,6 +1483,27 @@ async def admin_text_handler(update, context):
 
     state = context.user_data.get("state")
     text = (update.message.text or "").strip()
+
+    if state == "admin_new_password_only":
+        acc_id = context.user_data.get("edit_account_id")
+        u_name = context.user_data.get("edit_account_username", "")
+        h_name = context.user_data.get("edit_account_hotel", "")
+
+        ok, msg = update_hotel_password(acc_id, text)
+        context.user_data.clear()
+
+        if ok:
+            await update.message.reply_text(
+                "✅ **تم تحديث كلمة المرور بنجاح.**\n\n"
+                f"🏨 **الفندق:** {h_name}\n"
+                f"👤 **المستخدم:** `{u_name}`\n"
+                f"🔐 **كلمة المرور الجديدة:** `{text}`",
+                parse_mode="Markdown",
+                reply_markup=admin_menu()
+            )
+        else:
+            await update.message.reply_text(f"❌ {msg}", reply_markup=admin_menu())
+        return True
 
     if state == "admin_new_hotel":
         if not text:
