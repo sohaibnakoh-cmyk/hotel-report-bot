@@ -346,6 +346,17 @@ def clear_session(telegram_user_id):
         finally:
             conn.close()
 
+def clear_session_by_hotel_account(hotel_account_id):
+    """طرد الفندق من الجلسة بحذف أي جلسة نشطة مرتبطة بهذا الحساب"""
+    with DB_LOCK:
+        conn = db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM sessions WHERE hotel_account_id = %s", (hotel_account_id,))
+                conn.commit()
+        finally:
+            conn.close()
+
 
 # =========================================================
 # الأمان والحسابات
@@ -759,6 +770,7 @@ def admin_menu():
          InlineKeyboardButton("📤 الصادر / التعاميم", callback_data="admin_circulars")],
         [InlineKeyboardButton("🏨 إضافة حساب فندق", callback_data="admin_add_account")],
         [InlineKeyboardButton("🔑 تغيير كلمة مرور حساب", callback_data="admin_change_pass")],
+        [InlineKeyboardButton("🚪 طرد فندق من الجلسة", callback_data="admin_kick_list")],
         [InlineKeyboardButton("📋 حسابات الفنادق", callback_data="admin_list_accounts")],
         [InlineKeyboardButton("🔴 تعطيل حساب", callback_data="admin_disable"),
          InlineKeyboardButton("🟢 تفعيل حساب", callback_data="admin_enable")],
@@ -1133,6 +1145,24 @@ async def admin_list_accounts(update, context):
 
     await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=admin_menu())
 
+async def admin_kick_list(update, context):
+    """عرض قائمة الحسابات لطرد أي منها من الجلسة النشطة"""
+    query = update.callback_query
+    if not is_admin(update.effective_user.id):
+        return
+
+    accounts = get_hotel_accounts()
+    if not accounts:
+        await query.edit_message_text("🚪 لا توجد حسابات فنادق لطردها.", reply_markup=admin_menu())
+        return
+
+    buttons = []
+    for acc in accounts:
+        buttons.append([InlineKeyboardButton(f"🚪 طرد: {acc['hotel_name']} ({acc['username']})", callback_data=f"kick_{acc['id']}")])
+
+    buttons.append([InlineKeyboardButton("↩️ رجوع", callback_data="admin_home")])
+    await query.edit_message_text("🚪 **اختر الحساب المراد إخراجه وطرد صاحبه من الجلسة:**", reply_markup=InlineKeyboardMarkup(buttons))
+
 async def show_preview(update, context):
     query = update.callback_query
     user = update.effective_user
@@ -1498,8 +1528,19 @@ async def callback_handler(update, context):
         if data == "admin_change_pass":
             await admin_change_pass_list(update, context)
             return
+        if data == "admin_kick_list":
+            await admin_kick_list(update, context)
+            return
         if data.startswith("changepass_"):
             await admin_change_pass_select(update, context)
+            return
+        if data.startswith("kick_"):
+            try:
+                acc_id = int(data.split("_", 1)[1])
+                clear_session_by_hotel_account(acc_id)
+                await query.edit_message_text("🚪 تم طرد الفندق من الجلسة بنجاح.\nلن يمكنه الدخول مجدداً إلا بإدخال اسم المستخدم وكلمة المرور.", reply_markup=admin_menu())
+            except Exception:
+                await query.edit_message_text("❌ حدث خطأ أثناء طرد الفندق من الجلسة.", reply_markup=admin_menu())
             return
         if data == "admin_list_accounts":
             await admin_list_accounts(update, context)
@@ -1698,7 +1739,7 @@ async def admin_text_handler(update, context):
 async def text_router(update, context):
     if await admin_text_handler(update, context):
         return
-    await message_handler(update, context)
+    asyncio.create_task(message_handler(update, context)) # للاستبدال الآمن دون حجب التنفيذ
 
 async def error_handler(update, context):
     logger.error("خطأ في تنفيذ البوت", exc_info=context.error)
