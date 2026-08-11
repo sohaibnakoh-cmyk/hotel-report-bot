@@ -10,6 +10,8 @@ from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
+    MessageHandler,
+    filters,
     ContextTypes,
 )
 
@@ -82,7 +84,7 @@ def init_db():
 # تشغيل إنشاء الجداول عند بدء التشغيل
 init_db()
 
-# --- واجهة وتوابع لوحة المدير ---
+# --- لوحة تحكم المدير ---
 def get_admin_main_menu():
     """لوحة التحكم الرئيسية للمدير"""
     keyboard = [
@@ -116,7 +118,118 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-# معالج قسم الجلسات النشطة
+# --- إدارة الفنادق والحسابات من قِبل المدير ---
+async def admin_hotels_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ إضافة فندق وحساب جديد", callback_data="admin_add_hotel_prompt")],
+        [InlineKeyboardButton("📋 عرض الفنادق المسجلة", callback_data="admin_list_hotels")],
+        [InlineKeyboardButton("🔙 رجوع", callback_data="admin_back")]
+    ]
+    
+    await query.edit_message_text(
+        "🏨 **إدارة الفنادق والحسابات**\nاختر الإجراء المطلوب:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+async def admin_add_hotel_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['waiting_for_hotel_data'] = True
+    
+    keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="admin_hotels")]]
+    await query.edit_message_text(
+        "➕ **إضافة فندق وحساب جديد**\n\n"
+        "الرجاء إرسال البيانات في رسالة واحدة بالتنسيق التالي:\n"
+        "`اسم الفندق | الموقع | اسم المستخدم | كلمة المرور`\n\n"
+        "مثال:\n"
+        "`فندق الماسة | وسط المدينة | masa_hotel | 123456`",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+async def admin_list_hotels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    with db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT h.name, h.location, a.username, a.is_active 
+                FROM hotels h 
+                LEFT JOIN hotel_accounts a ON h.id = a.hotel_id;
+            """)
+            rows = cursor.fetchall()
+            
+    if not rows:
+        text = "🏨 **قائمة الفنادق:**\n\nلا توجد فنادق مسجلة حالياً."
+    else:
+        text = "🏨 **قائمة الفنادق والحسابات المسجلة:**\n\n"
+        for r in rows:
+            name, location, username, is_active = r
+            status = "🟢 فعال" if is_active else "🔴 معطل"
+            uname = username if username else "بدون حساب"
+            loc = location if location else "بدون موقع"
+            text += f"🏨 **{name}** ({loc})\n   👤 المستخدم: `{uname}` | الحالة: {status}\n\n"
+            
+    keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_hotels")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return
+        
+    if context.user_data.get('waiting_for_hotel_data'):
+        text = update.message.text.strip()
+        parts = [p.strip() for p in text.split('|')]
+        
+        if len(parts) != 4:
+            await update.message.reply_text(
+                "❌ التنسيق غير صحيح. يرجى إرسال البيانات بهذا الشكل تماماً:\n"
+                "`اسم الفندق | الموقع | اسم المستخدم | كلمة المرور`",
+                parse_mode="Markdown"
+            )
+            return
+            
+        hotel_name, location, username, password = parts
+        
+        try:
+            with db() as conn:
+                with conn.cursor() as cursor:
+                    # إضافة الفندق
+                    cursor.execute(
+                        "INSERT INTO hotels (name, location) VALUES (%s, %s) RETURNING id;",
+                        (hotel_name, location)
+                    )
+                    hotel_id = cursor.fetchone()[0]
+                    
+                    # إضافة الحساب المرتبط بالفندق
+                    cursor.execute(
+                        "INSERT INTO hotel_accounts (hotel_id, username, password_hash) VALUES (%s, %s, %s);",
+                        (hotel_id, username, password)
+                    )
+                    conn.commit()
+                    
+            context.user_data['waiting_for_hotel_data'] = False
+            await update.message.reply_text(
+                f"✅ **تم إضافة الفندق والحساب بنجاح!**\n\n"
+                f"🏨 الفندق: {hotel_name}\n"
+                f"📍 الموقع: {location}\n"
+                f"👤 اسم المستخدم: `{username}`",
+                reply_markup=get_admin_main_menu(),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Error adding hotel: {e}")
+            await update.message.reply_text(
+                "❌ حدث خطأ أثناء الحفظ (ربما اسم المستخدم مستخدم مسبقاً أو هناك مشكلة في قاعدة البيانات)."
+            )
+
+# --- معالج قسم الجلسات النشطة ---
 async def show_active_sessions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -179,7 +292,7 @@ async def handle_session_action(update: Update, context: ContextTypes.DEFAULT_TY
                         
     await show_active_sessions(update, context)
 
-# معالج قسم الصادر والتعاميم
+# --- معالج قسم الصادر والتعاميم ---
 async def show_circulars_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -201,16 +314,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "أهلاً بك في نظام إدارة معلومات الفنادق.\nيرجى تسجيل الدخول باستخدام حسابك المعتمد."
     )
 
-# --- تهيئة تطبيق تيليجرام والهاندلرز (بشكل عالمي لضمان عملها مع الـ Webhook) ---
+# --- تهيئة تطبيق تيليجرام والهاندلرز ---
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 
 # تسجيل الهاندلرز
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("admin", admin_panel))
 telegram_app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_back$"))
+telegram_app.add_handler(CallbackQueryHandler(admin_hotels_menu, pattern="^admin_hotels$"))
+telegram_app.add_handler(CallbackQueryHandler(admin_add_hotel_prompt, pattern="^admin_add_hotel_prompt$"))
+telegram_app.add_handler(CallbackQueryHandler(admin_list_hotels, pattern="^admin_list_hotels$"))
 telegram_app.add_handler(CallbackQueryHandler(show_active_sessions, pattern="^admin_sessions$"))
 telegram_app.add_handler(CallbackQueryHandler(handle_session_action, pattern="^session_(toggle|kick)_"))
 telegram_app.add_handler(CallbackQueryHandler(show_circulars_menu, pattern="^admin_circulars$"))
+
+# استقبال مدخلات النصوص من المدير (مثل إضافة الفنادق)
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_text_input))
 
 # تعيين الـ Webhook تلقائياً إذا وُجد الرابط الخارجي
 if RENDER_EXTERNAL_URL:
@@ -239,6 +358,7 @@ def webhook():
 @app.route('/')
 def index():
     return "Bot is running successfully with Webhook!", 200
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
