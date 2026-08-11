@@ -1,6 +1,8 @@
-reportlab
-Pillow
-arabic-reshaper
-python-bidi
-Flask
-python-telegram-bot
+python-telegram-bot>=20.0
+Flask>=2.0.0
+reportlab>=3.6.0
+arabic_reshaper>=3.0.0
+python-bidi>=0.4.2
+Pillow>=9.0.0
+psycopg2-binary>=2.9.0
+
