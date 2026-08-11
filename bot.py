@@ -347,7 +347,6 @@ def clear_session(telegram_user_id):
             conn.close()
 
 def clear_session_by_hotel_account(hotel_account_id):
-    """طرد الفندق من الجلسة بحذف أي جلسة نشطة مرتبطة بهذا الحساب"""
     with DB_LOCK:
         conn = db()
         try:
@@ -759,7 +758,7 @@ def make_pdf(guest):
 
 
 # =========================================================
-# لوحات المفاتيح
+# لوحات المفاتيح (محدثة وتتضمن أزرار الصادر وجلسات الحسابات)
 # =========================================================
 
 def admin_menu():
@@ -768,10 +767,10 @@ def admin_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(inbox_text, callback_data="admin_inbox"),
          InlineKeyboardButton("📤 الصادر / التعاميم", callback_data="admin_circulars")],
-        [InlineKeyboardButton("🏨 إضافة حساب فندق", callback_data="admin_add_account")],
-        [InlineKeyboardButton("🔑 تغيير كلمة مرور حساب", callback_data="admin_change_pass")],
-        [InlineKeyboardButton("🚪 طرد فندق من الجلسة", callback_data="admin_kick_list")],
-        [InlineKeyboardButton("📋 حسابات الفنادق", callback_data="admin_list_accounts")],
+        [InlineKeyboardButton("🏨 إضافة حساب فندق", callback_data="admin_add_account"),
+         InlineKeyboardButton("📋 حسابات الفنادق", callback_data="admin_list_accounts")],
+        [InlineKeyboardButton("🚪 جلسات الحسابات (طرد)", callback_data="admin_kick_list"),
+         InlineKeyboardButton("🔑 تغيير كلمة مرور", callback_data="admin_change_pass")],
         [InlineKeyboardButton("🔴 تعطيل حساب", callback_data="admin_disable"),
          InlineKeyboardButton("🟢 تفعيل حساب", callback_data="admin_enable")],
         [InlineKeyboardButton("📊 التقرير اليومي", callback_data="report_daily"),
@@ -1068,7 +1067,7 @@ async def photo_handler(update, context):
 
 
 # =========================================================
-# إرسال التقرير للإدارة (حفظ في الوارد + إشعار فقط)
+# إرسال التقرير للإدارة (حفظ في الوارد حصراً دون إزعاج شخصي)
 # =========================================================
 
 async def send_guest_to_admin(update, context):
@@ -1094,29 +1093,14 @@ async def send_guest_to_admin(update, context):
         await query.edit_message_text("❌ حدث خطأ أثناء حفظ البيانات.", reply_markup=hotel_menu())
         return
 
-    # إرسال إشعار نصي فقط للمدير دون إرسال ملف الـ PDF فوراً
-    try:
-        count = unread_count()
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                f"📥 **تقرير نزيل جديد في الوارد!**\n\n"
-                f"🏨 **الفندق:** {session['hotel_name']}\n"
-                f"👤 **النزيل:** {guest.get('full_name')}\n"
-                f"🆔 **رقم التقرير:** HR-{guest_id:06d}\n\n"
-                f"💡 اضغط على زر **الوارد ({count})** في لوحة التحكم لعرض التقرير وتحميل ملف PDF."
-            ),
-            parse_mode="Markdown"
-        )
-    except Exception:
-        logger.exception("فشل إرسال الإشعار للمدير")
+    # تم حفظ التقرير في الوارد حصراً (Inbox) دون إرسال رسالة نصية مباشرة للمدير لتنظيم البريد ووصوله للوارد فقط.
 
     context.user_data.pop("guest", None)
     context.user_data.pop("guest_step", None)
     context.user_data["state"] = "hotel_home"
 
     await query.edit_message_text(
-        "✅ **تم إرسال بيانات النزيل والتقرير بنجاح إلى الإدارة.**\n\n"
+        "✅ **تم إرسال بيانات النزيل والتقرير بنجاح إلى قسم الوارد.**\n\n"
         f"🆔 **رقم التقرير:** HR-{guest_id:06d}",
         parse_mode="Markdown",
         reply_markup=hotel_menu()
@@ -1146,7 +1130,6 @@ async def admin_list_accounts(update, context):
     await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=admin_menu())
 
 async def admin_kick_list(update, context):
-    """عرض قائمة الحسابات لطرد أي منها من الجلسة النشطة"""
     query = update.callback_query
     if not is_admin(update.effective_user.id):
         return
@@ -1161,7 +1144,7 @@ async def admin_kick_list(update, context):
         buttons.append([InlineKeyboardButton(f"🚪 طرد: {acc['hotel_name']} ({acc['username']})", callback_data=f"kick_{acc['id']}")])
 
     buttons.append([InlineKeyboardButton("↩️ رجوع", callback_data="admin_home")])
-    await query.edit_message_text("🚪 **اختر الحساب المراد إخراجه وطرد صاحبه من الجلسة:**", reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text("🚪 **اختر الحساب المراد إخراجه وطرد صاحبه من الجلسة النشطة:**", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def show_preview(update, context):
     query = update.callback_query
@@ -1460,7 +1443,7 @@ async def enable_accounts(update, context):
             buttons.append([InlineKeyboardButton(f"🟢 {acc['hotel_name']} — {acc['username']}", callback_data=f"enable_{acc['id']}")])
 
     buttons.append([InlineKeyboardButton("↩️ رجوع", callback_data="admin_home")])
-    await query.edit_message_text("🟢 **اختر الحساب المراد تفعيله:**", reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text("🟢 **اختر الحساب المراد تفْعيله:**", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def daily_report(update, context):
     query = update.callback_query
@@ -1538,9 +1521,9 @@ async def callback_handler(update, context):
             try:
                 acc_id = int(data.split("_", 1)[1])
                 clear_session_by_hotel_account(acc_id)
-                await query.edit_message_text("🚪 تم طرد الفندق من الجلسة بنجاح.\nلن يمكنه الدخول مجدداً إلا بإدخال اسم المستخدم وكلمة المرور.", reply_markup=admin_menu())
+                await query.edit_message_text("🚪 تم طرد الفندق من الجلسة النشطة بنجاح.\nلن يتمكن من المتابعة إلا بإعادة تسجيل الدخول بالمعلومات.", reply_markup=admin_menu())
             except Exception:
-                await query.edit_message_text("❌ حدث خطأ أثناء طرد الفندق من الجلسة.", reply_markup=admin_menu())
+                await query.edit_message_text("❌ حدث خطأ أثناء طرد الفندق.", reply_markup=admin_menu())
             return
         if data == "admin_list_accounts":
             await admin_list_accounts(update, context)
@@ -1636,7 +1619,6 @@ async def admin_text_handler(update, context):
         title = f"تعميم {today()}"
         save_circular(title, text)
 
-        # بث التعميم لجميع الجلسات الناشطة
         conn = db()
         try:
             with conn.cursor() as cur:
@@ -1701,7 +1683,7 @@ async def admin_text_handler(update, context):
 
     if state == "admin_username":
         if not re.match(r"^[A-Za-z0-9_.-]{3,32}$", text):
-            await update.message.reply_text("❌ اسم المستخدم يجب أن يكون بين 3 إلى 32 أحرف إنكليزية وأرقام فقط.")
+            await update.message.reply_text("❌ اسم المستخدم يجب أن يكون بين 3 إلى 32 حرفاً إنجليزياً وأرقاماً فقط.")
             return True
 
         context.user_data["new_username"] = text
@@ -1739,7 +1721,7 @@ async def admin_text_handler(update, context):
 async def text_router(update, context):
     if await admin_text_handler(update, context):
         return
-    asyncio.create_task(message_handler(update, context)) # للاستبدال الآمن دون حجب التنفيذ
+    asyncio.create_task(message_handler(update, context))
 
 async def error_handler(update, context):
     logger.error("خطأ في تنفيذ البوت", exc_info=context.error)
