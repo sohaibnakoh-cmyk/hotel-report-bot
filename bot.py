@@ -64,6 +64,7 @@ from PIL import Image as PILImage
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+ADMIN_ID = os.getenv("ADMIN_ID", "").strip()
 PORT = int(os.getenv("PORT", "10000"))
 
 FILES_DIR = Path("bot_files")
@@ -100,10 +101,31 @@ telegram_app = None
 BOT_LOOP = None
 
 # =========================================================
-# Flask
+# Flask (Health Check & Webhook)
 # =========================================================
 
 flask_app = Flask(__name__)
+
+@flask_app.route("/", methods=["GET"])
+def health():
+    return "Hotel Bot is running healthy", 200
+
+@flask_app.route("/telegram/webhook", methods=["POST"])
+def telegram_webhook():
+    global BOT_LOOP
+    try:
+        if telegram_app is None or BOT_LOOP is None:
+            return "Not ready", 503
+
+        data = request.get_json(force=True)
+        update = Update.de_json(data, telegram_app.bot)
+        future = asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), BOT_LOOP)
+        future.result(timeout=60)
+        return "OK", 200
+    except Exception:
+        logger.exception("خطأ في Webhook")
+        return "ERROR", 500
+
 
 # =========================================================
 # إعداد الخط العربي لـ ReportLab
@@ -176,7 +198,7 @@ def pdf_text(text):
 
 
 # =========================================================
-# قاعدة البيانات (PostgreSQL)
+# قاعدة البيانات (PostgreSQL) مع نظام إعادة المحاولة
 # =========================================================
 
 def db():
@@ -192,97 +214,108 @@ def today():
     return date.today().strftime("%Y-%m-%d")
 
 def init_db():
-    with DB_LOCK:
-        conn = db()
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
         try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS hotels (
-                        id SERIAL PRIMARY KEY,
-                        name TEXT UNIQUE NOT NULL,
-                        enabled INT DEFAULT 1,
-                        created_at TEXT NOT NULL
-                    )
-                """)
+            with DB_LOCK:
+                conn = db()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            CREATE TABLE IF NOT EXISTS hotels (
+                                id SERIAL PRIMARY KEY,
+                                name TEXT UNIQUE NOT NULL,
+                                enabled INT DEFAULT 1,
+                                created_at TEXT NOT NULL
+                            )
+                        """)
 
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS hotel_accounts (
-                        id SERIAL PRIMARY KEY,
-                        hotel_id INT NOT NULL,
-                        hotel_name TEXT NOT NULL,
-                        username TEXT UNIQUE NOT NULL,
-                        password_hash TEXT NOT NULL,
-                        enabled INT DEFAULT 1,
-                        created_at TEXT NOT NULL,
-                        FOREIGN KEY (hotel_id) REFERENCES hotels(id) ON DELETE CASCADE
-                    )
-                """)
+                        cur.execute("""
+                            CREATE TABLE IF NOT EXISTS hotel_accounts (
+                                id SERIAL PRIMARY KEY,
+                                hotel_id INT NOT NULL,
+                                hotel_name TEXT NOT NULL,
+                                username TEXT UNIQUE NOT NULL,
+                                password_hash TEXT NOT NULL,
+                                enabled INT DEFAULT 1,
+                                created_at TEXT NOT NULL,
+                                FOREIGN KEY (hotel_id) REFERENCES hotels(id) ON DELETE CASCADE
+                            )
+                        """)
 
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS guests (
-                        id SERIAL PRIMARY KEY,
-                        hotel_id INT,
-                        hotel_name TEXT,
-                        full_name TEXT,
-                        mother_name TEXT,
-                        birth_place_date TEXT,
-                        original_residence TEXT,
-                        governorate TEXT,
-                        hotel_area TEXT,
-                        stay_reason TEXT,
-                        check_in_date TEXT,
-                        stay_duration TEXT,
-                        notes TEXT,
-                        front_photo TEXT,
-                        back_photo TEXT,
-                        created_at TEXT
-                    )
-                """)
+                        cur.execute("""
+                            CREATE TABLE IF NOT EXISTS guests (
+                                id SERIAL PRIMARY KEY,
+                                hotel_id INT,
+                                hotel_name TEXT,
+                                full_name TEXT,
+                                mother_name TEXT,
+                                birth_place_date TEXT,
+                                original_residence TEXT,
+                                governorate TEXT,
+                                hotel_area TEXT,
+                                stay_reason TEXT,
+                                check_in_date TEXT,
+                                stay_duration TEXT,
+                                notes TEXT,
+                                front_photo TEXT,
+                                back_photo TEXT,
+                                created_at TEXT
+                            )
+                        """)
 
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS inbox (
-                        id SERIAL PRIMARY KEY,
-                        guest_id INT,
-                        hotel_id INT,
-                        is_read INT DEFAULT 0,
-                        created_at TEXT,
-                        FOREIGN KEY (guest_id) REFERENCES guests(id) ON DELETE CASCADE
-                    )
-                """)
+                        cur.execute("""
+                            CREATE TABLE IF NOT EXISTS inbox (
+                                id SERIAL PRIMARY KEY,
+                                guest_id INT,
+                                hotel_id INT,
+                                is_read INT DEFAULT 0,
+                                created_at TEXT,
+                                FOREIGN KEY (guest_id) REFERENCES guests(id) ON DELETE CASCADE
+                            )
+                        """)
 
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS circulars (
-                        id SERIAL PRIMARY KEY,
-                        title TEXT,
-                        content TEXT,
-                        created_at TEXT
-                    )
-                """)
+                        cur.execute("""
+                            CREATE TABLE IF NOT EXISTS circulars (
+                                id SERIAL PRIMARY KEY,
+                                title TEXT,
+                                content TEXT,
+                                created_at TEXT
+                            )
+                        """)
 
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS sessions (
-                        user_id BIGINT PRIMARY KEY,
-                        hotel_account_id INT,
-                        hotel_id INT,
-                        hotel_name TEXT,
-                        username TEXT,
-                        state TEXT,
-                        temp_data TEXT,
-                        updated_at TEXT,
-                        FOREIGN KEY (hotel_account_id) REFERENCES hotel_accounts(id) ON DELETE CASCADE
-                    )
-                """)
+                        cur.execute("""
+                            CREATE TABLE IF NOT EXISTS sessions (
+                                user_id BIGINT PRIMARY KEY,
+                                hotel_account_id INT,
+                                hotel_id INT,
+                                hotel_name TEXT,
+                                username TEXT,
+                                state TEXT,
+                                temp_data TEXT,
+                                updated_at TEXT,
+                                FOREIGN KEY (hotel_account_id) REFERENCES hotel_accounts(id) ON DELETE CASCADE
+                            )
+                        """)
 
-                for hotel in DEFAULT_HOTELS:
-                    cur.execute(
-                        "INSERT INTO hotels (name, enabled, created_at) VALUES (%s, 1, %s) ON CONFLICT (name) DO NOTHING",
-                        (hotel, now())
-                    )
+                        for hotel in DEFAULT_HOTELS:
+                            cur.execute(
+                                "INSERT INTO hotels (name, enabled, created_at) VALUES (%s, 1, %s) ON CONFLICT (name) DO NOTHING",
+                                (hotel, now())
+                            )
 
-                conn.commit()
-        finally:
-            conn.close()
-    logger.info("✅ PostgreSQL Database Initialized Successfully!")
+                        conn.commit()
+                finally:
+                    conn.close()
+            logger.info("✅ PostgreSQL Database Initialized Successfully!")
+            return
+        except Exception as e:
+            logger.warning(f"⚠️ محاولة الاتصال بقاعدة البيانات ({attempt}/{max_retries}) فشلت: {e}")
+            if attempt == max_retries:
+                logger.critical("❌ تعذر الاتصال بقاعدة البيانات نهائياً.")
+                raise e
+            import time
+            time.sleep(3)
 
 
 # =========================================================
@@ -358,11 +391,10 @@ def hash_password(password):
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 def is_admin(user_id):
-    admin_id_raw = os.getenv("ADMIN_ID", "").strip()
-    if not admin_id_raw:
+    if not ADMIN_ID:
         return False
     try:
-        return int(user_id) == int(admin_id_raw)
+        return int(user_id) == int(ADMIN_ID)
     except Exception:
         return False
 
@@ -630,7 +662,7 @@ def format_report(title, data):
 
 
 # =========================================================
-# PDF مع نظام التسمية باسم النزيل والتصحيح التلقائي
+# PDF مع نظام التصحيح التلقائي
 # =========================================================
 
 def sanitize_filename(name):
@@ -752,7 +784,7 @@ def make_pdf(guest):
 
 
 # =========================================================
-# لوحات المفاتيح (محدثة وشاملة لأزرار الصادر والجلسات)
+# لوحات المفاتيح
 # =========================================================
 
 def admin_menu():
@@ -1248,7 +1280,7 @@ async def resend_pdf(update, context):
     try:
         pdf_path = make_pdf(row)
         guest_name = row.get('full_name', 'النزيل')
-        admin_id_raw = int(os.getenv("ADMIN_ID", "0").strip())
+        admin_id_raw = int(ADMIN_ID)
         with open(pdf_path, "rb") as pdf:
             await context.bot.send_document(
                 chat_id=admin_id_raw,
@@ -1458,7 +1490,7 @@ async def monthly_report(update, context):
 
 
 # =========================================================
-# Callback Handler (مصحح ومفعل بالكامل للأزرار)
+# Callback Handler
 # =========================================================
 
 async def callback_handler(update, context):
@@ -1721,28 +1753,8 @@ async def error_handler(update, context):
 
 
 # =========================================================
-# Webhook & Server
+# تشغيل التطبيق
 # =========================================================
-
-@flask_app.route("/", methods=["GET"])
-def health():
-    return "Hotel Bot is running healthy", 200
-
-@flask_app.route("/telegram/webhook", methods=["POST"])
-def telegram_webhook():
-    global BOT_LOOP
-    try:
-        if telegram_app is None or BOT_LOOP is None:
-            return "Not ready", 503
-
-        data = request.get_json(force=True)
-        update = Update.de_json(data, telegram_app.bot)
-        future = asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), BOT_LOOP)
-        future.result(timeout=60)
-        return "OK", 200
-    except Exception:
-        logger.exception("خطأ في Webhook")
-        return "ERROR", 500
 
 async def start_telegram():
     global telegram_app, BOT_LOOP
@@ -1774,9 +1786,8 @@ async def start_telegram():
     await asyncio.Event().wait()
 
 def main():
-    admin_id_raw = os.getenv("ADMIN_ID", "").strip()
-    if not BOT_TOKEN or not admin_id_raw:
-        logger.error("❌ BOT_TOKEN أو ADMIN_ID مفقود في متغيرات البيئة")
+    if not BOT_TOKEN or not ADMIN_ID:
+        logger.error("❌ BOT_TOKEN أو ADMIN_ID مفقود في متغيرات البيئة!")
         return
 
     init_db()
