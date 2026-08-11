@@ -1,14 +1,17 @@
 import os
 import re
-import sqlite3
 import hashlib
 import logging
 import asyncio
 import threading
+from urllib.parse import urlparse
 
 from datetime import datetime, date
 from pathlib import Path
 from threading import Lock
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 from flask import Flask, request
 
@@ -61,6 +64,7 @@ from PIL import Image as PILImage
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "").strip()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 try:
     ADMIN_ID = int(ADMIN_ID_RAW)
@@ -68,7 +72,6 @@ except Exception:
     ADMIN_ID = 0
 
 PORT = int(os.getenv("PORT", "10000"))
-DB_FILE = "hotel_bot.db"
 
 FILES_DIR = Path("bot_files")
 PDF_DIR = FILES_DIR / "pdf"
@@ -180,14 +183,13 @@ def pdf_text(text):
 
 
 # =========================================================
-# قاعدة البيانات
+# قاعدة البيانات (PostgreSQL)
 # =========================================================
 
 def db():
-    conn = sqlite3.connect(DB_FILE, timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
+    if not DATABASE_URL:
+        raise ValueError("❌ DATABASE_URL غير معرف في متغيرات البيئة!")
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return conn
 
 def now():
@@ -200,85 +202,85 @@ def init_db():
     with DB_LOCK:
         conn = db()
         try:
-            cur = conn.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS hotels (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT UNIQUE NOT NULL,
-                    enabled INTEGER DEFAULT 1,
-                    created_at TEXT NOT NULL
-                )
-            """)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS hotels (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT UNIQUE NOT NULL,
+                        enabled INT DEFAULT 1,
+                        created_at TEXT NOT NULL
+                    )
+                """)
 
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS hotel_accounts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    hotel_id INTEGER NOT NULL,
-                    hotel_name TEXT NOT NULL,
-                    username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    enabled INTEGER DEFAULT 1,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (hotel_id) REFERENCES hotels(id) ON DELETE CASCADE
-                )
-            """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS hotel_accounts (
+                        id SERIAL PRIMARY KEY,
+                        hotel_id INT NOT NULL,
+                        hotel_name TEXT NOT NULL,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        enabled INT DEFAULT 1,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (hotel_id) REFERENCES hotels(id) ON DELETE CASCADE
+                    )
+                """)
 
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS guests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    hotel_id INTEGER,
-                    hotel_name TEXT,
-                    full_name TEXT,
-                    mother_name TEXT,
-                    birth_place_date TEXT,
-                    original_residence TEXT,
-                    governorate TEXT,
-                    hotel_area TEXT,
-                    stay_reason TEXT,
-                    check_in_date TEXT,
-                    stay_duration TEXT,
-                    notes TEXT,
-                    front_photo TEXT,
-                    back_photo TEXT,
-                    created_at TEXT
-                )
-            """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS guests (
+                        id SERIAL PRIMARY KEY,
+                        hotel_id INT,
+                        hotel_name TEXT,
+                        full_name TEXT,
+                        mother_name TEXT,
+                        birth_place_date TEXT,
+                        original_residence TEXT,
+                        governorate TEXT,
+                        hotel_area TEXT,
+                        stay_reason TEXT,
+                        check_in_date TEXT,
+                        stay_duration TEXT,
+                        notes TEXT,
+                        front_photo TEXT,
+                        back_photo TEXT,
+                        created_at TEXT
+                    )
+                """)
 
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS inbox (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    guest_id INTEGER,
-                    hotel_id INTEGER,
-                    is_read INTEGER DEFAULT 0,
-                    created_at TEXT,
-                    FOREIGN KEY (guest_id) REFERENCES guests(id) ON DELETE CASCADE
-                )
-            """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS inbox (
+                        id SERIAL PRIMARY KEY,
+                        guest_id INT,
+                        hotel_id INT,
+                        is_read INT DEFAULT 0,
+                        created_at TEXT,
+                        FOREIGN KEY (guest_id) REFERENCES guests(id) ON DELETE CASCADE
+                    )
+                """)
 
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS sessions (
-                    user_id INTEGER PRIMARY KEY,
-                    hotel_account_id INTEGER,
-                    hotel_id INTEGER,
-                    hotel_name TEXT,
-                    username TEXT,
-                    state TEXT,
-                    temp_data TEXT,
-                    updated_at TEXT,
-                    FOREIGN KEY (hotel_account_id) REFERENCES hotel_accounts(id) ON DELETE CASCADE
-                )
-            """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        user_id BIGINT PRIMARY KEY,
+                        hotel_account_id INT,
+                        hotel_id INT,
+                        hotel_name TEXT,
+                        username TEXT,
+                        state TEXT,
+                        temp_data TEXT,
+                        updated_at TEXT,
+                        FOREIGN KEY (hotel_account_id) REFERENCES hotel_accounts(id) ON DELETE CASCADE
+                    )
+                """)
 
-            for hotel in DEFAULT_HOTELS:
-                cur.execute(
-                    "INSERT OR IGNORE INTO hotels (name, enabled, created_at) VALUES (?, 1, ?)",
-                    (hotel, now())
-                )
+                for hotel in DEFAULT_HOTELS:
+                    cur.execute(
+                        "INSERT INTO hotels (name, enabled, created_at) VALUES (%s, 1, %s) ON CONFLICT (name) DO NOTHING",
+                        (hotel, now())
+                    )
 
-            conn.commit()
+                conn.commit()
         finally:
             conn.close()
-    logger.info("Database initialized with WAL mode & persistent sessions")
+    logger.info("✅ PostgreSQL Database Initialized Successfully!")
 
 
 # =========================================================
@@ -288,16 +290,19 @@ def init_db():
 def get_session(telegram_user_id):
     conn = db()
     try:
-        row = conn.execute("SELECT * FROM sessions WHERE user_id = ?", (telegram_user_id,)).fetchone()
-        if not row:
-            return None
-        
-        if row["hotel_account_id"]:
-            acc = conn.execute("SELECT enabled FROM hotel_accounts WHERE id = ?", (row["hotel_account_id"],)).fetchone()
-            if not acc or acc["enabled"] != 1:
-                clear_session(telegram_user_id)
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM sessions WHERE user_id = %s", (telegram_user_id,))
+            row = cur.fetchone()
+            if not row:
                 return None
-        return dict(row)
+            
+            if row["hotel_account_id"]:
+                cur.execute("SELECT enabled FROM hotel_accounts WHERE id = %s", (row["hotel_account_id"],))
+                acc = cur.fetchone()
+                if not acc or acc["enabled"] != 1:
+                    clear_session(telegram_user_id)
+                    return None
+            return dict(row)
     finally:
         conn.close()
 
@@ -305,19 +310,20 @@ def save_session(telegram_user_id, hotel_account_id, hotel_id, hotel_name, usern
     with DB_LOCK:
         conn = db()
         try:
-            conn.execute("""
-                INSERT INTO sessions (user_id, hotel_account_id, hotel_id, hotel_name, username, state, temp_data, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    hotel_account_id=excluded.hotel_account_id,
-                    hotel_id=excluded.hotel_id,
-                    hotel_name=excluded.hotel_name,
-                    username=excluded.username,
-                    state=excluded.state,
-                    temp_data=excluded.temp_data,
-                    updated_at=excluded.updated_at
-            """, (telegram_user_id, hotel_account_id, hotel_id, hotel_name, username, state, temp_data, now()))
-            conn.commit()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO sessions (user_id, hotel_account_id, hotel_id, hotel_name, username, state, temp_data, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        hotel_account_id=EXCLUDED.hotel_account_id,
+                        hotel_id=EXCLUDED.hotel_id,
+                        hotel_name=EXCLUDED.hotel_name,
+                        username=EXCLUDED.username,
+                        state=EXCLUDED.state,
+                        temp_data=EXCLUDED.temp_data,
+                        updated_at=EXCLUDED.updated_at
+                """, (telegram_user_id, hotel_account_id, hotel_id, hotel_name, username, state, temp_data, now()))
+                conn.commit()
         finally:
             conn.close()
 
@@ -325,8 +331,9 @@ def clear_session(telegram_user_id):
     with DB_LOCK:
         conn = db()
         try:
-            conn.execute("DELETE FROM sessions WHERE user_id = ?", (telegram_user_id,))
-            conn.commit()
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM sessions WHERE user_id = %s", (telegram_user_id,))
+                conn.commit()
         finally:
             conn.close()
 
@@ -349,7 +356,9 @@ def is_admin(user_id):
 def get_hotels():
     conn = db()
     try:
-        return conn.execute("SELECT * FROM hotels WHERE enabled = 1 ORDER BY id ASC").fetchall()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM hotels WHERE enabled = 1 ORDER BY id ASC")
+            return cur.fetchall()
     finally:
         conn.close()
 
@@ -360,10 +369,11 @@ def add_hotel(name):
     with DB_LOCK:
         conn = db()
         try:
-            conn.execute("INSERT INTO hotels (name, enabled, created_at) VALUES (?, 1, ?)", (name, now()))
-            conn.commit()
-            return True
-        except sqlite3.IntegrityError:
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO hotels (name, enabled, created_at) VALUES (%s, 1, %s)", (name, now()))
+                conn.commit()
+                return True
+        except psycopg2.IntegrityError:
             return False
         finally:
             conn.close()
@@ -381,22 +391,24 @@ def create_hotel_account(hotel_name, username, password):
     with DB_LOCK:
         conn = db()
         try:
-            hotel = conn.execute("SELECT * FROM hotels WHERE name = ? AND enabled = 1", (hotel_name,)).fetchone()
-            if not hotel:
-                return False, "الفندق المحدد غير موجود."
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM hotels WHERE name = %s AND enabled = 1", (hotel_name,))
+                hotel = cur.fetchone()
+                if not hotel:
+                    return False, "الفندق المحدد غير موجود."
 
-            existing_user = conn.execute("SELECT * FROM hotel_accounts WHERE username = ?", (username,)).fetchone()
-            if existing_user:
-                return False, "اسم المستخدم مستخدم مسبقاً."
+                cur.execute("SELECT * FROM hotel_accounts WHERE username = %s", (username,))
+                if cur.fetchone():
+                    return False, "اسم المستخدم مستخدم مسبقاً."
 
-            conn.execute("""
-                INSERT INTO hotel_accounts (hotel_id, hotel_name, username, password_hash, enabled, created_at)
-                VALUES (?, ?, ?, ?, 1, ?)
-            """, (hotel["id"], hotel_name, username, password_hash, now()))
+                cur.execute("""
+                    INSERT INTO hotel_accounts (hotel_id, hotel_name, username, password_hash, enabled, created_at)
+                    VALUES (%s, %s, %s, %s, 1, %s)
+                """, (hotel["id"], hotel_name, username, password_hash, now()))
 
-            conn.commit()
-            return True, "تم إنشاء الحساب بنجاح."
-        except sqlite3.IntegrityError:
+                conn.commit()
+                return True, "تم إنشاء الحساب بنجاح."
+        except psycopg2.IntegrityError:
             conn.rollback()
             return False, "اسم المستخدم مستخدم مسبقاً."
         except Exception as e:
@@ -415,9 +427,10 @@ def update_hotel_password(account_id, new_password):
     with DB_LOCK:
         conn = db()
         try:
-            conn.execute("UPDATE hotel_accounts SET password_hash = ? WHERE id = ?", (password_hash, account_id))
-            conn.commit()
-            return True, "تم تغيير كلمة المرور بنجاح."
+            with conn.cursor() as cur:
+                cur.execute("UPDATE hotel_accounts SET password_hash = %s WHERE id = %s", (password_hash, account_id))
+                conn.commit()
+                return True, "تم تغيير كلمة المرور بنجاح."
         except Exception as e:
             conn.rollback()
             return False, str(e)
@@ -429,21 +442,25 @@ def login_hotel(username, password):
     password = password.strip()
     conn = db()
     try:
-        row = conn.execute("SELECT * FROM hotel_accounts WHERE username = ?", (username,)).fetchone()
-        if not row or row["password_hash"] != hash_password(password):
-            return None, "❌ اسم المستخدم أو كلمة المرور غير صحيحة."
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM hotel_accounts WHERE username = %s", (username,))
+            row = cur.fetchone()
+            if not row or row["password_hash"] != hash_password(password):
+                return None, "❌ اسم المستخدم أو كلمة المرور غير صحيحة."
 
-        if row["enabled"] != 1:
-            return None, "❌ هذا الحساب معطل حالياً من قبل الإدارة."
+            if row["enabled"] != 1:
+                return None, "❌ هذا الحساب معطل حالياً من قبل الإدارة."
 
-        return row, None
+            return row, None
     finally:
         conn.close()
 
 def get_hotel_accounts():
     conn = db()
     try:
-        return conn.execute("SELECT * FROM hotel_accounts ORDER BY hotel_name, username").fetchall()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM hotel_accounts ORDER BY hotel_name, username")
+            return cur.fetchall()
     finally:
         conn.close()
 
@@ -451,8 +468,9 @@ def set_hotel_account_status(account_id, status):
     with DB_LOCK:
         conn = db()
         try:
-            conn.execute("UPDATE hotel_accounts SET enabled = ? WHERE id = ?", (1 if status else 0, account_id))
-            conn.commit()
+            with conn.cursor() as cur:
+                cur.execute("UPDATE hotel_accounts SET enabled = %s WHERE id = %s", (1 if status else 0, account_id))
+                conn.commit()
         finally:
             conn.close()
 
@@ -465,48 +483,54 @@ def save_guest(hotel_id, hotel_name, data):
     with DB_LOCK:
         conn = db()
         try:
-            cur = conn.execute("""
-                INSERT INTO guests (
-                    hotel_id, hotel_name, full_name, mother_name, birth_place_date,
-                    original_residence, governorate, hotel_area, stay_reason, check_in_date,
-                    stay_duration, notes, front_photo, back_photo, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                hotel_id, hotel_name,
-                data.get("full_name", ""), data.get("mother_name", ""),
-                data.get("birth_place_date", ""), data.get("original_residence", ""),
-                data.get("governorate", ""), data.get("hotel_area", ""),
-                data.get("stay_reason", ""), data.get("check_in_date", ""),
-                data.get("stay_duration", ""), data.get("notes", ""),
-                data.get("front_photo", ""), data.get("back_photo", ""),
-                now()
-            ))
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO guests (
+                        hotel_id, hotel_name, full_name, mother_name, birth_place_date,
+                        original_residence, governorate, hotel_area, stay_reason, check_in_date,
+                        stay_duration, notes, front_photo, back_photo, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    hotel_id, hotel_name,
+                    data.get("full_name", ""), data.get("mother_name", ""),
+                    data.get("birth_place_date", ""), data.get("original_residence", ""),
+                    data.get("governorate", ""), data.get("hotel_area", ""),
+                    data.get("stay_reason", ""), data.get("check_in_date", ""),
+                    data.get("stay_duration", ""), data.get("notes", ""),
+                    data.get("front_photo", ""), data.get("back_photo", ""),
+                    now()
+                ))
 
-            guest_id = cur.lastrowid
-            conn.execute("INSERT INTO inbox (guest_id, hotel_id, is_read, created_at) VALUES (?, ?, 0, ?)",
-                         (guest_id, hotel_id, now()))
+                guest_id = cur.fetchone()["id"]
+                cur.execute("INSERT INTO inbox (guest_id, hotel_id, is_read, created_at) VALUES (%s, %s, 0, %s)",
+                             (guest_id, hotel_id, now()))
 
-            conn.commit()
-            return guest_id
+                conn.commit()
+                return guest_id
         finally:
             conn.close()
 
 def unread_count():
     conn = db()
     try:
-        return conn.execute("SELECT COUNT(*) FROM inbox WHERE is_read = 0").fetchone()[0]
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS count FROM inbox WHERE is_read = 0")
+            return cur.fetchone()["count"]
     finally:
         conn.close()
 
 def get_inbox(limit=20):
     conn = db()
     try:
-        return conn.execute("""
-            SELECT inbox.id AS inbox_id, inbox.is_read, inbox.created_at, guests.*
-            FROM inbox JOIN guests ON guests.id = inbox.guest_id
-            ORDER BY inbox.id DESC LIMIT ?
-        """, (limit,)).fetchall()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT inbox.id AS inbox_id, inbox.is_read, inbox.created_at, guests.*
+                FROM inbox JOIN guests ON guests.id = inbox.guest_id
+                ORDER BY inbox.id DESC LIMIT %s
+            """, (limit,))
+            return cur.fetchall()
     finally:
         conn.close()
 
@@ -514,26 +538,35 @@ def mark_inbox_read(inbox_id):
     with DB_LOCK:
         conn = db()
         try:
-            conn.execute("UPDATE inbox SET is_read = 1 WHERE id = ?", (inbox_id,))
-            conn.commit()
+            with conn.cursor() as cur:
+                cur.execute("UPDATE inbox SET is_read = 1 WHERE id = %s", (inbox_id,))
+                conn.commit()
         finally:
             conn.close()
 
 def report_data(start_date=None, end_date=None):
     conn = db()
     try:
-        condition = ""
-        params = []
-        if start_date and end_date:
-            condition = "WHERE date(created_at) BETWEEN ? AND ?"
-            params = [start_date, end_date]
+        with conn.cursor() as cur:
+            condition = ""
+            params = []
+            if start_date and end_date:
+                condition = "WHERE DATE(created_at::timestamp) BETWEEN %s AND %s"
+                params = [start_date, end_date]
 
-        total = conn.execute(f"SELECT COUNT(*) FROM guests {condition}", params).fetchone()[0]
-        by_governorate = conn.execute(f"SELECT governorate, COUNT(*) AS total FROM guests {condition} GROUP BY governorate ORDER BY total DESC", params).fetchall()
-        by_hotel = conn.execute(f"SELECT hotel_name, COUNT(*) AS total FROM guests {condition} GROUP BY hotel_name ORDER BY total DESC", params).fetchall()
-        by_reason = conn.execute(f"SELECT stay_reason, COUNT(*) AS total FROM guests {condition} GROUP BY stay_reason ORDER BY total DESC", params).fetchall()
+            cur.execute(f"SELECT COUNT(*) AS total FROM guests {condition}", params)
+            total = cur.fetchone()["total"]
 
-        return {"total": total, "governorates": by_governorate, "hotels": by_hotel, "reasons": by_reason}
+            cur.execute(f"SELECT governorate, COUNT(*) AS total FROM guests {condition} GROUP BY governorate ORDER BY total DESC", params)
+            by_governorate = cur.fetchall()
+
+            cur.execute(f"SELECT hotel_name, COUNT(*) AS total FROM guests {condition} GROUP BY hotel_name ORDER BY total DESC", params)
+            by_hotel = cur.fetchall()
+
+            cur.execute(f"SELECT stay_reason, COUNT(*) AS total FROM guests {condition} GROUP BY stay_reason ORDER BY total DESC", params)
+            by_reason = cur.fetchall()
+
+            return {"total": total, "governorates": by_governorate, "hotels": by_hotel, "reasons": by_reason}
     finally:
         conn.close()
 
@@ -567,7 +600,7 @@ def format_report(title, data):
 # =========================================================
 
 def generate_pdf_document(guest, include_photos=True):
-    guest_id = guest["id"] if isinstance(guest, (dict, sqlite3.Row)) else 0
+    guest_id = guest["id"] if isinstance(guest, dict) or hasattr(guest, '__getitem__') else 0
     filename = f"guest_{guest_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     path = PDF_DIR / filename
 
@@ -590,15 +623,11 @@ def generate_pdf_document(guest, include_photos=True):
     value_style = ParagraphStyle("ArabicValue", parent=styles["Normal"], fontName=font_regular, alignment=TA_RIGHT, fontSize=10, leading=15)
 
     def g(key):
-        if isinstance(guest, sqlite3.Row):
-            try:
-                val = guest[key]
-                return str(val) if val is not None else ""
-            except IndexError:
-                return ""
-        elif isinstance(guest, dict):
-            return str(guest.get(key, ""))
-        return ""
+        try:
+            val = guest[key]
+            return str(val) if val is not None else ""
+        except Exception:
+            return ""
 
     story = [
         Paragraph(pdf_text("نظام إدارة معلومات الفنادق"), title_style),
@@ -1018,7 +1047,9 @@ async def send_guest_to_admin(update, context):
 
     conn = db()
     try:
-        row = conn.execute("SELECT * FROM guests WHERE id = ?", (guest_id,)).fetchone()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM guests WHERE id = %s", (guest_id,))
+            row = cur.fetchone()
     finally:
         conn.close()
 
@@ -1131,9 +1162,11 @@ async def open_inbox(update, context):
     mark_inbox_read(inbox_id)
     conn = db()
     try:
-        row = conn.execute("""
-            SELECT inbox.*, guests.* FROM inbox JOIN guests ON guests.id = inbox.guest_id WHERE inbox.id = ?
-        """, (inbox_id,)).fetchone()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT inbox.*, guests.* FROM inbox JOIN guests ON guests.id = inbox.guest_id WHERE inbox.id = %s
+            """, (inbox_id,))
+            row = cur.fetchone()
     finally:
         conn.close()
 
@@ -1178,7 +1211,9 @@ async def resend_pdf(update, context):
 
     conn = db()
     try:
-        row = conn.execute("SELECT * FROM guests WHERE id = ?", (guest_id,)).fetchone()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM guests WHERE id = %s", (guest_id,))
+            row = cur.fetchone()
     finally:
         conn.close()
 
@@ -1249,7 +1284,9 @@ async def admin_change_pass_select(update, context):
 
     conn = db()
     try:
-        row = conn.execute("SELECT * FROM hotel_accounts WHERE id = ?", (acc_id,)).fetchone()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM hotel_accounts WHERE id = %s", (acc_id,))
+            row = cur.fetchone()
     finally:
         conn.close()
 
@@ -1284,7 +1321,9 @@ async def select_hotel(update, context):
 
     conn = db()
     try:
-        row = conn.execute("SELECT * FROM hotels WHERE id = ?", (hotel_id,)).fetchone()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM hotels WHERE id = %s", (hotel_id,))
+            row = cur.fetchone()
     finally:
         conn.close()
 
