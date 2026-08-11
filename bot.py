@@ -258,6 +258,15 @@ def init_db():
                 """)
 
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS circulars (
+                        id SERIAL PRIMARY KEY,
+                        title TEXT,
+                        content TEXT,
+                        created_at TEXT
+                    )
+                """)
+
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS sessions (
                         user_id BIGINT PRIMARY KEY,
                         hotel_account_id INT,
@@ -476,7 +485,7 @@ def set_hotel_account_status(account_id, status):
 
 
 # =========================================================
-# النزلاء والتقارير
+# النزلاء والتقارير والتعاميم
 # =========================================================
 
 def save_guest(hotel_id, hotel_name, data):
@@ -544,6 +553,27 @@ def mark_inbox_read(inbox_id):
         finally:
             conn.close()
 
+def save_circular(title, content):
+    with DB_LOCK:
+        conn = db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO circulars (title, content, created_at) VALUES (%s, %s, %s) RETURNING id",
+                            (title, content, now()))
+                conn.commit()
+                return cur.fetchone()["id"]
+        finally:
+            conn.close()
+
+def get_circulars(limit=10):
+    conn = db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM circulars ORDER BY id DESC LIMIT %s", (limit,))
+            return cur.fetchall()
+    finally:
+        conn.close()
+
 def report_data(start_date=None, end_date=None):
     conn = db()
     try:
@@ -596,12 +626,16 @@ def format_report(title, data):
 
 
 # =========================================================
-# PDF مع نظام التصحيح التلقائي المباشر (Automatic Fallback)
+# PDF مع نظام التسمية باسم النزيل والتصحيح التلقائي
 # =========================================================
 
+def sanitize_filename(name):
+    clean = re.sub(r'[\\/*?:"<>|]', '', str(name)).strip()
+    return clean if clean else "نزيل"
+
 def generate_pdf_document(guest, include_photos=True):
-    guest_id = guest["id"] if isinstance(guest, dict) or hasattr(guest, '__getitem__') else 0
-    filename = f"guest_{guest_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    guest_name = sanitize_filename(guest.get("full_name", "نزيل"))
+    filename = f"تقرير النزيل - {guest_name}.pdf"
     path = PDF_DIR / filename
 
     doc = SimpleDocTemplate(
@@ -628,6 +662,8 @@ def generate_pdf_document(guest, include_photos=True):
             return str(val) if val is not None else ""
         except Exception:
             return ""
+
+    guest_id = guest.get("id", 0)
 
     story = [
         Paragraph(pdf_text("نظام إدارة معلومات الفنادق"), title_style),
@@ -717,14 +753,15 @@ def make_pdf(guest):
 
 def admin_menu():
     count = unread_count()
-    inbox_text = f"📥 الوارد ({count})" if count else "📥 الوارد"
+    inbox_text = f"📥 الوارد ({count})" if count > 0 else "📥 الوارد"
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton(inbox_text, callback_data="admin_inbox"),
+         InlineKeyboardButton("📤 الصادر / التعاميم", callback_data="admin_circulars")],
         [InlineKeyboardButton("🏨 إضافة حساب فندق", callback_data="admin_add_account")],
         [InlineKeyboardButton("🔑 تغيير كلمة مرور حساب", callback_data="admin_change_pass")],
         [InlineKeyboardButton("📋 حسابات الفنادق", callback_data="admin_list_accounts")],
         [InlineKeyboardButton("🔴 تعطيل حساب", callback_data="admin_disable"),
          InlineKeyboardButton("🟢 تفعيل حساب", callback_data="admin_enable")],
-        [InlineKeyboardButton(inbox_text, callback_data="admin_inbox")],
         [InlineKeyboardButton("📊 التقرير اليومي", callback_data="report_daily"),
          InlineKeyboardButton("📊 التقرير الشهري", callback_data="report_monthly")],
     ])
@@ -822,7 +859,7 @@ async def hotel_login(update, context):
 
 
 # =========================================================
-# معالجة بيانات النزلاء والأسئلة الإجبارية مع الأمثلة
+# معالجة بيانات النزلاء والأسئلة الإجبارية
 # =========================================================
 
 GUEST_STEPS = [
@@ -1019,7 +1056,7 @@ async def photo_handler(update, context):
 
 
 # =========================================================
-# إرسال التقرير للإدارة
+# إرسال التقرير للإدارة (حفظ في الوارد + إشعار فقط)
 # =========================================================
 
 async def send_guest_to_admin(update, context):
@@ -1045,39 +1082,22 @@ async def send_guest_to_admin(update, context):
         await query.edit_message_text("❌ حدث خطأ أثناء حفظ البيانات.", reply_markup=hotel_menu())
         return
 
-    conn = db()
+    # إرسال إشعار نصي فقط للمدير دون إرسال ملف الـ PDF فوراً
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM guests WHERE id = %s", (guest_id,))
-            row = cur.fetchone()
-    finally:
-        conn.close()
-
-    try:
-        pdf_path = make_pdf(row)
+        count = unread_count()
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                f"📥 **تقرير نزيل جديد في الوارد!**\n\n"
+                f"🏨 **الفندق:** {session['hotel_name']}\n"
+                f"👤 **النزيل:** {guest.get('full_name')}\n"
+                f"🆔 **رقم التقرير:** HR-{guest_id:06d}\n\n"
+                f"💡 اضغط على زر **الوارد ({count})** في لوحة التحكم لعرض التقرير وتحميل ملف PDF."
+            ),
+            parse_mode="Markdown"
+        )
     except Exception:
-        logger.exception("فشل إنشاء PDF حتى بعد التصحيح التلقائي")
-        await query.edit_message_text("❌ حدث خطأ في النظام أثناء إنشاء التقرير.", reply_markup=hotel_menu())
-        return
-
-    try:
-        with open(pdf_path, "rb") as pdf_file:
-            await context.bot.send_document(
-                chat_id=ADMIN_ID,
-                document=pdf_file,
-                caption=(
-                    "📥 *وارد جديد*\n\n"
-                    f"🏨 **الفندق:** {row['hotel_name']}\n"
-                    f"👤 **النزيل:** {row['full_name']}\n"
-                    f"📅 **التاريخ:** {row['created_at']}\n\n"
-                    f"🆔 **رقم التقرير:** HR-{guest_id:06d}"
-                ),
-                parse_mode="Markdown"
-            )
-    except Exception:
-        logger.exception("فشل إرسال PDF للمدير")
-        await query.edit_message_text("❌ تم حفظ البيانات لكن تعذر إرسال الملف للإدارة حالياً.", reply_markup=hotel_menu())
-        return
+        logger.exception("فشل إرسال الإشعار للمدير")
 
     context.user_data.pop("guest", None)
     context.user_data.pop("guest_step", None)
@@ -1136,16 +1156,16 @@ async def admin_inbox(update, context):
 
     rows = get_inbox(15)
     if not rows:
-        await query.edit_message_text("📥 **الوارد**\n\nلا توجد رسائل جديدة.", reply_markup=admin_menu())
+        await query.edit_message_text("📥 **الوارد**\n\nلا توجد رسائل أو تقارير جديدة.", reply_markup=admin_menu())
         return
 
     buttons = []
     for row in rows:
-        st = "🔴" if row["is_read"] == 0 else "⚪"
+        st = "🔴 (جديد)" if row["is_read"] == 0 else "⚪"
         name = (row["full_name"] or "بدون اسم")[:25]
         buttons.append([InlineKeyboardButton(f"{st} {name} — {row['hotel_name']}", callback_data=f"inbox_{row['inbox_id']}")])
 
-    buttons.append([InlineKeyboardButton("↩️ رجوع", callback_data="admin_home")])
+    buttons.append([InlineKeyboardButton("↩️ رجوع للرئيسية", callback_data="admin_home")])
     await query.edit_message_text("📥 **التقارير الواردة:**", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def open_inbox(update, context):
@@ -1194,7 +1214,7 @@ async def open_inbox(update, context):
         text,
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📄 إعادة إرسال PDF", callback_data=f"resend_{row['guest_id']}")],
+            [InlineKeyboardButton("📄 تحميل ملف الـ PDF", callback_data=f"resend_{row['guest_id']}")],
             [InlineKeyboardButton("↩️ رجوع للوارد", callback_data="admin_inbox")]
         ])
     )
@@ -1222,16 +1242,54 @@ async def resend_pdf(update, context):
 
     try:
         pdf_path = make_pdf(row)
+        guest_name = row.get('full_name', 'النزيل')
         with open(pdf_path, "rb") as pdf:
             await context.bot.send_document(
                 chat_id=ADMIN_ID,
                 document=pdf,
+                filename=f"تقرير النزيل - {guest_name}.pdf",
                 caption=f"📄 تقرير HR-{guest_id:06d}\n🏨 {row['hotel_name']}\n👤 {row['full_name']}"
             )
-        await query.edit_message_text("✅ تمت إعادة إرسال ملف PDF بنجاح.", reply_markup=admin_menu())
+        await query.edit_message_text("✅ تم تحميل وإرسال ملف PDF بنجاح.", reply_markup=admin_menu())
     except Exception:
-        logger.exception("إعادة الإرسال فشلت")
-        await query.edit_message_text("❌ فشل إعادة إنشاء وإرسال PDF.", reply_markup=admin_menu())
+        logger.exception("إرسال ملف PDF فشل")
+        await query.edit_message_text("❌ فشل إنشاء وإرسال PDF.", reply_markup=admin_menu())
+
+
+# =========================================================
+# قسم الصادر / التعاميم
+# =========================================================
+
+async def admin_circulars(update, context):
+    query = update.callback_query
+    if not is_admin(update.effective_user.id):
+        return
+
+    circulars = get_circulars(10)
+    msg = "📤 **قسم الصادر والتعاميم:**\n\n"
+    if circulars:
+        for c in circulars:
+            msg += f"📌 **{c['title']}**\n📅 {c['created_at']}\n{c['content'][:100]}...\n───────────────\n"
+    else:
+        msg += "لا توجد تعاميم صادرة مسبقاً.\n\n"
+
+    buttons = [
+        [InlineKeyboardButton("➕ إرسال تعميم جديد لكل الفنادق", callback_data="admin_new_circular")],
+        [InlineKeyboardButton("↩️ رجوع للرئيسية", callback_data="admin_home")]
+    ]
+    await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def admin_new_circular_start(update, context):
+    query = update.callback_query
+    if not is_admin(update.effective_user.id):
+        return
+
+    context.user_data["state"] = "admin_circular_text"
+    await query.edit_message_text(
+        "📢 **إرسال تعميم جديد**\n\n"
+        "يرجى كتابة نص التعميم الرسمي المراد إرساله إلى جميع حسابات الفنادق المفعلة:",
+        reply_markup=back_button()
+    )
 
 
 # =========================================================
@@ -1455,6 +1513,12 @@ async def callback_handler(update, context):
         if data == "admin_inbox":
             await admin_inbox(update, context)
             return
+        if data == "admin_circulars":
+            await admin_circulars(update, context)
+            return
+        if data == "admin_new_circular":
+            await admin_new_circular_start(update, context)
+            return
         if data == "report_daily":
             await daily_report(update, context)
             return
@@ -1522,6 +1586,43 @@ async def admin_text_handler(update, context):
 
     state = context.user_data.get("state")
     text = (update.message.text or "").strip()
+
+    if state == "admin_circular_text":
+        if not text:
+            await update.message.reply_text("❌ يرجى كتابة نص التعميم.")
+            return True
+
+        title = f"تعميم {today()}"
+        save_circular(title, text)
+
+        # بث التعميم لجميع الجلسات الناشطة
+        conn = db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT user_id FROM sessions")
+                sessions = cur.fetchall()
+        finally:
+            conn.close()
+
+        sent_count = 0
+        for s in sessions:
+            try:
+                await context.bot.send_message(
+                    chat_id=s["user_id"],
+                    text=f"📢 **تعميم إداري مهم**\n\n{text}",
+                    parse_mode="Markdown"
+                )
+                sent_count += 1
+            except Exception:
+                pass
+
+        context.user_data.clear()
+        await update.message.reply_text(
+            f"✅ **تم نشر التعميم بنجاح.**\n\n👥 تم إرساله إلى {sent_count} مستخدم متصل حالياً.",
+            parse_mode="Markdown",
+            reply_markup=admin_menu()
+        )
+        return True
 
     if state == "admin_new_password_only":
         acc_id = context.user_data.get("edit_account_id")
