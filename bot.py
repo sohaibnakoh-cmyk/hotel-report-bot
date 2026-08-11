@@ -758,7 +758,7 @@ def make_pdf(guest):
 
 
 # =========================================================
-# لوحات المفاتيح (محدثة وتتضمن أزرار الصادر وجلسات الحسابات)
+# لوحات المفاتيح (محدثة بحيث تظهر الأزرار المطلوبة بوضوح في المقدمة)
 # =========================================================
 
 def admin_menu():
@@ -766,11 +766,11 @@ def admin_menu():
     inbox_text = f"📥 الوارد ({count})" if count > 0 else "📥 الوارد"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(inbox_text, callback_data="admin_inbox"),
-         InlineKeyboardButton("📤 الصادر / التعاميم", callback_data="admin_circulars")],
+         InlineKeyboardButton("📤 الصادر والتعاميم", callback_data="admin_circulars")],
+        [InlineKeyboardButton("🚪 جلسات الحسابات (طرد)", callback_data="admin_kick_list")],
         [InlineKeyboardButton("🏨 إضافة حساب فندق", callback_data="admin_add_account"),
          InlineKeyboardButton("📋 حسابات الفنادق", callback_data="admin_list_accounts")],
-        [InlineKeyboardButton("🚪 جلسات الحسابات (طرد)", callback_data="admin_kick_list"),
-         InlineKeyboardButton("🔑 تغيير كلمة مرور", callback_data="admin_change_pass")],
+        [InlineKeyboardButton("🔑 تغيير كلمة مرور", callback_data="admin_change_pass")],
         [InlineKeyboardButton("🔴 تعطيل حساب", callback_data="admin_disable"),
          InlineKeyboardButton("🟢 تفعيل حساب", callback_data="admin_enable")],
         [InlineKeyboardButton("📊 التقرير اليومي", callback_data="report_daily"),
@@ -1092,8 +1092,6 @@ async def send_guest_to_admin(update, context):
         logger.exception("فشل حفظ النزيل")
         await query.edit_message_text("❌ حدث خطأ أثناء حفظ البيانات.", reply_markup=hotel_menu())
         return
-
-    # تم حفظ التقرير في الوارد حصراً (Inbox) دون إرسال رسالة نصية مباشرة للمدير لتنظيم البريد ووصوله للوارد فقط.
 
     context.user_data.pop("guest", None)
     context.user_data.pop("guest_step", None)
