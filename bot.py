@@ -752,7 +752,7 @@ def make_pdf(guest):
 
 
 # =========================================================
-# لوحات المفاتيح
+# لوحات المفاتيح (محدثة وشاملة لأزرار الصادر والجلسات)
 # =========================================================
 
 def admin_menu():
@@ -984,7 +984,7 @@ async def message_handler(update, context):
                 if not text or len(text) < 2:
                     await update.message.reply_text(
                         "⚠️ *إجابة غير مقبولة!*\n"
-                        "الجواب على هذا السؤال إجباري، يرجى كتابة إجابة واضحة وصحيحة للمتابعة.",
+                        "الجواب على هذا السؤال إجباري، يرجى كتابة إجابة واضحة والصحيحة للمتابعة.",
                         parse_mode="Markdown"
                     )
                     return
@@ -1214,8 +1214,6 @@ async def open_inbox(update, context):
         f"⏳ **المدة:** {row['stay_duration']}\n"
         f"📌 **الملاحظات:** {row['notes']}\n"
     )
-
-    admin_id_raw = os.getenv("ADMIN_ID", "").strip()
 
     await query.edit_message_text(
         text,
@@ -1460,7 +1458,7 @@ async def monthly_report(update, context):
 
 
 # =========================================================
-# Callback Handler (مصحح ومفعل بالكامل)
+# Callback Handler (مصحح ومفعل بالكامل للأزرار)
 # =========================================================
 
 async def callback_handler(update, context):
@@ -1762,16 +1760,16 @@ async def start_telegram():
 
     render_url = os.getenv("RENDER_EXTERNAL_URL", "").strip()
     if not render_url:
-        raise RuntimeError("RENDER_EXTERNAL_URL غير معرف")
+        logger.warning("⚠️ RENDER_EXTERNAL_URL غير معرف، تأكد من ضبطه على المنصة لتفعيل الـ Webhook بنجاح.")
+    else:
+        webhook_url = render_url.rstrip("/") + "/telegram/webhook"
+        try:
+            await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+        except Exception:
+            pass
 
-    webhook_url = render_url.rstrip("/") + "/telegram/webhook"
-    try:
-        await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-    except Exception:
-        pass
-
-    await telegram_app.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-    logger.info("Bot Webhook setup complete: %s", webhook_url)
+        await telegram_app.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        logger.info("Bot Webhook setup complete: %s", webhook_url)
 
     await asyncio.Event().wait()
 
