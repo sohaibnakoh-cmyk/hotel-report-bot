@@ -63,14 +63,7 @@ from PIL import Image as PILImage
 # =========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_ID_RAW = os.getenv("ADMIN_ID", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-
-try:
-    ADMIN_ID = int(ADMIN_ID_RAW)
-except Exception:
-    ADMIN_ID = 0
-
 PORT = int(os.getenv("PORT", "10000"))
 
 FILES_DIR = Path("bot_files")
@@ -365,10 +358,11 @@ def hash_password(password):
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 def is_admin(user_id):
-    if ADMIN_ID == 0:
+    admin_id_raw = os.getenv("ADMIN_ID", "").strip()
+    if not admin_id_raw:
         return False
     try:
-        return int(user_id) == ADMIN_ID
+        return int(user_id) == int(admin_id_raw)
     except Exception:
         return False
 
@@ -758,7 +752,7 @@ def make_pdf(guest):
 
 
 # =========================================================
-# لوحات المفاتيح (محدثة بحيث تظهر الأزرار المطلوبة بوضوح في المقدمة)
+# لوحات المفاتيح
 # =========================================================
 
 def admin_menu():
@@ -1067,7 +1061,7 @@ async def photo_handler(update, context):
 
 
 # =========================================================
-# إرسال التقرير للإدارة (حفظ في الوارد حصراً دون إزعاج شخصي)
+# إرسال التقرير للإدارة
 # =========================================================
 
 async def send_guest_to_admin(update, context):
@@ -1221,6 +1215,8 @@ async def open_inbox(update, context):
         f"📌 **الملاحظات:** {row['notes']}\n"
     )
 
+    admin_id_raw = os.getenv("ADMIN_ID", "").strip()
+
     await query.edit_message_text(
         text,
         parse_mode="Markdown",
@@ -1254,9 +1250,10 @@ async def resend_pdf(update, context):
     try:
         pdf_path = make_pdf(row)
         guest_name = row.get('full_name', 'النزيل')
+        admin_id_raw = int(os.getenv("ADMIN_ID", "0").strip())
         with open(pdf_path, "rb") as pdf:
             await context.bot.send_document(
-                chat_id=ADMIN_ID,
+                chat_id=admin_id_raw,
                 document=pdf,
                 filename=f"تقرير النزيل - {guest_name}.pdf",
                 caption=f"📄 تقرير HR-{guest_id:06d}\n🏨 {row['hotel_name']}\n👤 {row['full_name']}"
@@ -1304,7 +1301,7 @@ async def admin_new_circular_start(update, context):
 
 
 # =========================================================
-# معالجة إضافة وتعديل وإدارة الحسابات (إدارياً)
+# معالجة إضافة وتعديل وإدارة الحسابات
 # =========================================================
 
 async def admin_add_account(update, context):
@@ -1779,8 +1776,9 @@ async def start_telegram():
     await asyncio.Event().wait()
 
 def main():
-    if not BOT_TOKEN or ADMIN_ID == 0:
-        logger.error("❌ BOT_TOKEN أو ADMIN_ID مفقود")
+    admin_id_raw = os.getenv("ADMIN_ID", "").strip()
+    if not BOT_TOKEN or not admin_id_raw:
+        logger.error("❌ BOT_TOKEN أو ADMIN_ID مفقود في متغيرات البيئة")
         return
 
     init_db()
