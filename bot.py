@@ -116,7 +116,7 @@ DEFAULT_SECTIONS = [
 
     # تعميم
     BROADCAST_TEXT,
-) = range(36)
+) = range(37)
 
 
 # ============================================================
@@ -3522,7 +3522,7 @@ def main():
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .post_init(setup_background_tasks)
+        .post_init(start_background_tasks)
         .build()
     )
 
