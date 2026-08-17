@@ -310,6 +310,14 @@ def init_db():
     for query in dewan_columns:
         cur.execute(query)
 
+    # بعض قواعد البيانات القديمة تحتوي على عمود subject إجباري
+    # بينما النسخة الحالية لا تستخدمه. نضع قيمة افتراضية فارغة
+    # حتى لا يفشل حفظ الوارد أو الصادر بسبب NOT NULL.
+    cur.execute("ALTER TABLE dewan ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''")
+    cur.execute("UPDATE dewan SET subject='' WHERE subject IS NULL")
+    cur.execute("ALTER TABLE dewan ALTER COLUMN subject SET DEFAULT ''")
+    cur.execute("ALTER TABLE dewan ALTER COLUMN subject SET NOT NULL")
+
     # --------------------------------------------------------
     # تحديث باقي الجداول القديمة
     # --------------------------------------------------------
@@ -2120,24 +2128,56 @@ async def finish_question(
         "submission_kind": submission_kind,
     }
 
-    await update.message.reply_text(
-        "✅ تم حفظ البيانات.\n\n"
-        "هل انتهيت من إدخال هذا البيان؟",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "✅ نعم",
-                        callback_data="finish:yes",
-                    ),
-                    InlineKeyboardButton(
-                        "❌ لا",
-                        callback_data="finish:no",
-                    ),
-                ]
-            ]
-        ),
+    # عرض البيانات كاملة للمستخدم قبل الإرسال إلى الإدارة.
+    # نقسم النص إذا كان طويلًا حتى لا يتجاوز حد Telegram.
+    preview = (
+        "📋 <b>مراجعة البيانات قبل الإرسال</b>\n\n"
+        f"{html.escape(str(body))}\n\n"
+        "هل أنت متأكد من هذه المعلومات؟"
     )
+
+    if len(preview) <= 4000:
+        await update.message.reply_text(
+            preview,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ نعم",
+                            callback_data="finish:yes",
+                        ),
+                        InlineKeyboardButton(
+                            "❌ لا",
+                            callback_data="finish:no",
+                        ),
+                    ]
+                ]
+            ),
+        )
+    else:
+        # إذا كان المحتوى طويلًا، نرسل المعاينة أولًا ثم الأزرار في رسالة مستقلة.
+        await update.message.reply_text(
+            preview[:3900],
+            parse_mode="HTML",
+        )
+        await update.message.reply_text(
+            "هل أنت متأكد من هذه المعلومات؟",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ نعم",
+                            callback_data="finish:yes",
+                        ),
+                        InlineKeyboardButton(
+                            "❌ لا",
+                            callback_data="finish:no",
+                        ),
+                    ]
+                ]
+            ),
+        )
 
 
 async def finish_callback(update, context):
@@ -2258,24 +2298,26 @@ async def finish_callback(update, context):
             )
             return
 
-        conn = db()
-        cur = conn.cursor()
+        # لا نعتبر البيان مرسلًا إلا إذا وصل إلى مدير واحد على الأقل.
+        if sent > 0:
+            conn = db()
+            cur = conn.cursor()
 
-        cur.execute(
-            f"""
-            UPDATE {table}
-            SET
-                sent_to_admin=TRUE,
-                sent_at=CURRENT_TIMESTAMP
-            WHERE id=%s
-            """,
-            (pending["row_id"],),
-        )
+            cur.execute(
+                f"""
+                UPDATE {table}
+                SET
+                    sent_to_admin=TRUE,
+                    sent_at=CURRENT_TIMESTAMP
+                WHERE id=%s
+                """,
+                (pending["row_id"],),
+            )
 
-        conn.commit()
+            conn.commit()
 
-        cur.close()
-        conn.close()
+            cur.close()
+            conn.close()
 
         context.user_data.pop(
             "pending_submission",
@@ -2540,6 +2582,7 @@ async def save_dewan_incoming(update, context):
         INSERT INTO dewan(
             user_id,
             kind,
+            subject,
             recipient,
             book_number,
             required_count,
@@ -2551,6 +2594,7 @@ async def save_dewan_incoming(update, context):
         VALUES(
             %s,
             'in',
+            '',
             %s,
             %s,
             %s,
@@ -2642,6 +2686,7 @@ async def save_dewan_outgoing(update, context):
         INSERT INTO dewan(
             user_id,
             kind,
+            subject,
             recipient,
             book_number,
             required_count,
@@ -2653,6 +2698,7 @@ async def save_dewan_outgoing(update, context):
         VALUES(
             %s,
             'out',
+            '',
             %s,
             %s,
             %s,
@@ -3525,6 +3571,11 @@ async def start_background_tasks(application):
     )
 
 
+async def post_init(application):
+    # تسجيل /start في قائمة أوامر Telegram، مع تشغيل التذكير اليومي.
+    await setup_bot_commands(application)
+    await start_background_tasks(application)
+
 
 # ============================================================
 # main
@@ -3549,7 +3600,7 @@ def main():
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .post_init(start_background_tasks)
+        .post_init(post_init)
         .build()
     )
 
