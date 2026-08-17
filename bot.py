@@ -118,6 +118,8 @@ DEFAULT_SECTIONS = [
     BROADCAST_TEXT,
 ) = range(36)
 
+QUESTION_SECTION, QUESTION_FORM, QUESTION_TEXT = range(36, 39)
+
 
 # ============================================================
 # قاعدة البيانات
@@ -260,6 +262,36 @@ def init_db():
         );
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS question_definitions (
+            id SERIAL PRIMARY KEY,
+            section_code VARCHAR(50) NOT NULL,
+            form_code VARCHAR(50) NOT NULL,
+            field_key VARCHAR(100) NOT NULL,
+            question_text TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 1,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(section_code, form_code, field_key)
+        )
+    """)
+    default_questions = {
+        ("DEWAN", "out"): [("recipient","الجهة المرسل إليها"),("book_number","رقم الكتاب"),("required_count","العدد المطلوب"),("completed_count","العدد المنجز"),("not_completed_count","العدد غير المنجز"),("reason","سبب عدم الإنجاز")],
+        ("DEWAN", "in"): [("recipient","الجهة المرسل منها"),("book_number","رقم الكتاب"),("required_count","العدد المطلوب")],
+        ("AKARAT", "main"): [("name","اسم المستأجر"),("nationality","الجنسية"),("property","العقار"),("phone","رقم الهاتف"),("notes","ملاحظات")],
+        ("MIGRANTS", "main"): [("province","المحافظة"),("arab_count","عدد العرب"),("foreign_count","عدد الأجانب"),("status_text","الحالة")],
+        ("TQARER", "main"): [("required_count","العدد المطلوب"),("completed_count","العدد المنجز"),("impossible_count","العدد المتعذر"),("notes","ملاحظات")],
+        ("AMN_AFRAD", "main"): [("sessions_count","عدد الجلسات"),("notes","ملاحظات")],
+        ("AMN_ALAMLEN", "main"): [("rounds_count","عدد الجولات"),("location","الموقع"),("notes","ملاحظات")],
+    }
+    for (sc, fc), qs in default_questions.items():
+        for pos, (fk, qt) in enumerate(qs, 1):
+            cur.execute("""
+                INSERT INTO question_definitions(section_code,form_code,field_key,question_text,position)
+                VALUES(%s,%s,%s,%s,%s)
+                ON CONFLICT(section_code,form_code,field_key) DO NOTHING
+            """, (sc,fc,fk,qt,pos))
+
     # --------------------------------------------------------
     # تحديث جدول الديوان القديم
     # --------------------------------------------------------
@@ -309,14 +341,6 @@ def init_db():
 
     for query in dewan_columns:
         cur.execute(query)
-
-    # بعض قواعد البيانات القديمة تحتوي على عمود subject إجباري
-    # بينما النسخة الحالية لا تستخدمه. نضع قيمة افتراضية فارغة
-    # حتى لا يفشل حفظ الوارد أو الصادر بسبب NOT NULL.
-    cur.execute("ALTER TABLE dewan ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''")
-    cur.execute("UPDATE dewan SET subject='' WHERE subject IS NULL")
-    cur.execute("ALTER TABLE dewan ALTER COLUMN subject SET DEFAULT ''")
-    cur.execute("ALTER TABLE dewan ALTER COLUMN subject SET NOT NULL")
 
     # --------------------------------------------------------
     # تحديث باقي الجداول القديمة
@@ -588,33 +612,6 @@ async def public_callback(update, context):
             "🔐 أرسل اسم المستخدم:"
         )
         return LOGIN_USERNAME
-
-
-
-# ============================================================
-# معالج أزرار المستخدم العامة
-# ============================================================
-async def user_callback(update, context):
-    q = update.callback_query
-    await q.answer()
-
-    user = get_user(update.effective_user.id)
-    if not user or not user["enabled"]:
-        await q.message.reply_text(
-            "❌ الحساب غير موجود أو معطل.\nاضغط /start للبدء."
-        )
-        return ConversationHandler.END
-
-    context.user_data["user_id"] = user["id"]
-
-    if q.data == "u:logout":
-        await logout(update, context)
-        return ConversationHandler.END
-
-    # أزرار u:* الخاصة بإدخال البيانات يتم التعامل معها أولًا بواسطة
-    # ConversationHandler المناسب. إذا وصل الزر إلى هنا فهو غير معروف.
-    await user_menu(update, context)
-    return ConversationHandler.END
 
 
 # ============================================================
@@ -1156,40 +1153,11 @@ async def add_section_code(update, context):
 
 @admin_only
 async def admin_sections(update, context):
-    q = update.callback_query
-    await q.answer()
-
-    sections = get_sections(enabled_only=False)
-
-    kb = []
-
-    for s in sections:
-        status = "🟢" if s["enabled"] else "🔴"
-
-        kb.append(
-            [
-                InlineKeyboardButton(
-                    f"{status} {s['name']} — {s['code']}",
-                    callback_data=(
-                        f"section_action:{s['id']}"
-                    ),
-                )
-            ]
-        )
-
-    kb.append(
-        [
-            InlineKeyboardButton(
-                "➕ إضافة قسم",
-                callback_data="m:add_section",
-            )
-        ]
-    )
-
-    await q.message.reply_text(
-        "📂 إدارة الأقسام:",
-        reply_markup=InlineKeyboardMarkup(kb),
-    )
+    q=update.callback_query; await q.answer(); sections=get_sections(enabled_only=False); kb=[]
+    for sec in sections:
+        kb.append([InlineKeyboardButton(f"{'🟢' if sec['enabled'] else '🔴'} {sec['name']} — {sec['code']}",callback_data=f"section_action:{sec['id']}")])
+    kb.append([InlineKeyboardButton("➕ إضافة قسم",callback_data="m:add_section")])
+    await q.message.reply_text("📂 إدارة الأقسام:\n\nاضغط على القسم لعرض المستخدمين والنماذج والأسئلة وإدارتها.",reply_markup=InlineKeyboardMarkup(kb))
 
 
 # ============================================================
@@ -2128,56 +2096,24 @@ async def finish_question(
         "submission_kind": submission_kind,
     }
 
-    # عرض البيانات كاملة للمستخدم قبل الإرسال إلى الإدارة.
-    # نقسم النص إذا كان طويلًا حتى لا يتجاوز حد Telegram.
-    preview = (
-        "📋 <b>مراجعة البيانات قبل الإرسال</b>\n\n"
-        f"{html.escape(str(body))}\n\n"
-        "هل أنت متأكد من هذه المعلومات؟"
+    await update.message.reply_text(
+        "✅ تم حفظ البيانات.\n\n"
+        "هل انتهيت من إدخال هذا البيان؟",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ نعم",
+                        callback_data="finish:yes",
+                    ),
+                    InlineKeyboardButton(
+                        "❌ لا",
+                        callback_data="finish:no",
+                    ),
+                ]
+            ]
+        ),
     )
-
-    if len(preview) <= 4000:
-        await update.message.reply_text(
-            preview,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "✅ نعم",
-                            callback_data="finish:yes",
-                        ),
-                        InlineKeyboardButton(
-                            "❌ لا",
-                            callback_data="finish:no",
-                        ),
-                    ]
-                ]
-            ),
-        )
-    else:
-        # إذا كان المحتوى طويلًا، نرسل المعاينة أولًا ثم الأزرار في رسالة مستقلة.
-        await update.message.reply_text(
-            preview[:3900],
-            parse_mode="HTML",
-        )
-        await update.message.reply_text(
-            "هل أنت متأكد من هذه المعلومات؟",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "✅ نعم",
-                            callback_data="finish:yes",
-                        ),
-                        InlineKeyboardButton(
-                            "❌ لا",
-                            callback_data="finish:no",
-                        ),
-                    ]
-                ]
-            ),
-        )
 
 
 async def finish_callback(update, context):
@@ -2298,26 +2234,24 @@ async def finish_callback(update, context):
             )
             return
 
-        # لا نعتبر البيان مرسلًا إلا إذا وصل إلى مدير واحد على الأقل.
-        if sent > 0:
-            conn = db()
-            cur = conn.cursor()
+        conn = db()
+        cur = conn.cursor()
 
-            cur.execute(
-                f"""
-                UPDATE {table}
-                SET
-                    sent_to_admin=TRUE,
-                    sent_at=CURRENT_TIMESTAMP
-                WHERE id=%s
-                """,
-                (pending["row_id"],),
-            )
+        cur.execute(
+            f"""
+            UPDATE {table}
+            SET
+                sent_to_admin=TRUE,
+                sent_at=CURRENT_TIMESTAMP
+            WHERE id=%s
+            """,
+            (pending["row_id"],),
+        )
 
-            conn.commit()
+        conn.commit()
 
-            cur.close()
-            conn.close()
+        cur.close()
+        conn.close()
 
         context.user_data.pop(
             "pending_submission",
@@ -2582,7 +2516,6 @@ async def save_dewan_incoming(update, context):
         INSERT INTO dewan(
             user_id,
             kind,
-            subject,
             recipient,
             book_number,
             required_count,
@@ -2594,7 +2527,6 @@ async def save_dewan_incoming(update, context):
         VALUES(
             %s,
             'in',
-            '',
             %s,
             %s,
             %s,
@@ -2686,7 +2618,6 @@ async def save_dewan_outgoing(update, context):
         INSERT INTO dewan(
             user_id,
             kind,
-            subject,
             recipient,
             book_number,
             required_count,
@@ -2698,7 +2629,6 @@ async def save_dewan_outgoing(update, context):
         VALUES(
             %s,
             'out',
-            '',
             %s,
             %s,
             %s,
@@ -3571,11 +3501,6 @@ async def start_background_tasks(application):
     )
 
 
-async def post_init(application):
-    # تسجيل /start في قائمة أوامر Telegram، مع تشغيل التذكير اليومي.
-    await setup_bot_commands(application)
-    await start_background_tasks(application)
-
 
 # ============================================================
 # main
@@ -3600,7 +3525,7 @@ def main():
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .post_init(post_init)
+        .post_init(start_background_tasks)
         .build()
     )
 
@@ -4063,6 +3988,17 @@ def main():
         ],
     )
 
+    question_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(admin_question_add_start, pattern=r"^q:add:\d+:[A-Za-z0-9_]+$"),
+            CallbackQueryHandler(admin_question_edit_start, pattern=r"^q:edit:\d+$"),
+        ],
+        states={QUESTION_TEXT:[MessageHandler(filters.TEXT & ~filters.COMMAND, admin_question_text)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_user=True,
+        per_chat=True,
+    )
+
     # ========================================================
     # التعميم
     # ========================================================
@@ -4114,6 +4050,7 @@ def main():
     app.add_handler(add_section_conv)
     app.add_handler(edit_account_conv)
 
+    app.add_handler(question_conv)
     app.add_handler(broadcast_conv)
 
     app.add_handler(dewan_conv)
@@ -4209,6 +4146,11 @@ def main():
             pattern=r"^m:sections$",
         )
     )
+
+    app.add_handler(CallbackQueryHandler(admin_section_action, pattern=r"^section_action:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_section_questions, pattern=r"^q:section:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_question_form, pattern=r"^q:form:\d+:[A-Za-z0-9_]+$"))
+    app.add_handler(CallbackQueryHandler(admin_question_toggle, pattern=r"^q:toggle:\d+$"))
 
     app.add_handler(
         CallbackQueryHandler(
