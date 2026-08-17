@@ -883,12 +883,12 @@ async def manager_menu(update, context):
         ],
         [
             InlineKeyboardButton(
-                "⛔ تعطيل/تفعيل",
-                callback_data="m:toggle",
-            ),
-            InlineKeyboardButton(
                 "📊 التقارير",
                 callback_data="m:reports",
+            ),
+            InlineKeyboardButton(
+                "🗑 مسح البيانات",
+                callback_data="m:clear_data",
             ),
         ],
         [
@@ -1656,7 +1656,7 @@ async def admin_users(update, context):
 
     if not rows:
         await q.message.reply_text(
-            "لا توجد حسابات."
+            "👥 الحسابات: 0\n\nلا توجد حسابات."
         )
         return
 
@@ -1681,7 +1681,7 @@ async def admin_users(update, context):
         )
 
     await q.message.reply_text(
-        "👥 الحسابات:",
+        f"👥 الحسابات: {len(rows)}\n\nاختر الحساب المطلوب:",
         reply_markup=InlineKeyboardMarkup(kb),
     )
 
@@ -1714,9 +1714,9 @@ async def admin_user_action(update, context):
         ],
         [
             InlineKeyboardButton(
-                "⛔ تعطيل/تفعيل",
+                "🗑 حذف الحساب",
                 callback_data=(
-                    f"m:toggleone:{uid}"
+                    f"m:delete_user:{uid}"
                 ),
             )
         ],
@@ -1737,6 +1737,118 @@ async def admin_user_action(update, context):
         f"{'🟢 فعال' if u['enabled'] else '🔴 معطل'}",
         reply_markup=InlineKeyboardMarkup(kb),
     )
+
+
+@admin_only
+async def admin_delete_user_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    uid = int(q.data.split(":")[2])
+    u = get_user_by_id(uid)
+    if not u:
+        await q.message.reply_text("❌ الحساب غير موجود.")
+        return
+    section = u["section_name"] or u["module"] or "-"
+    await q.message.reply_text(
+        f"⚠️ تأكيد حذف الحساب\n\n"
+        f"👤 الحساب: {html.escape(u['username'])}\n"
+        f"📂 القسم: {html.escape(section)}\n\n"
+        "سيتم حذف الحساب نهائيًا من النظام، ولن يتمكن من الدخول بعد ذلك.\n"
+        "أما البيانات والتقارير السابقة فستبقى محفوظة دون ربط بهذا الحساب.\n\n"
+        "هل أنت متأكد؟",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗑 نعم، حذف نهائي", callback_data=f"m:delete_user_confirm:{uid}")],
+            [InlineKeyboardButton("❌ إلغاء", callback_data=f"m:user:{uid}")],
+        ]),
+    )
+
+
+@admin_only
+async def admin_delete_user_confirm(update, context):
+    q = update.callback_query
+    await q.answer()
+    uid = int(q.data.split(":")[3])
+    u = get_user_by_id(uid)
+    if not u:
+        await q.message.reply_text("❌ الحساب غير موجود.")
+        return
+
+    username = u["username"]
+    conn = db()
+    cur = conn.cursor()
+    try:
+        # جميع جداول البيانات المرتبطة بالمستخدم تستخدم ON DELETE SET NULL.
+        # نحذف الحساب فقط، ولا نحذف الأسئلة أو الأقسام.
+        cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+        if cur.rowcount != 1:
+            conn.rollback()
+            await q.message.reply_text("❌ لم يتم العثور على الحساب.")
+            return
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        log.exception("Failed to delete user %s", uid)
+        await q.message.reply_text("❌ تعذر حذف الحساب. لم يتم تغيير شيء.")
+        return
+    finally:
+        cur.close()
+        conn.close()
+
+    await q.message.reply_text(f"✅ تم حذف الحساب {html.escape(username)} نهائيًا.", parse_mode="HTML")
+    await admin_users(update, context)
+
+
+@admin_only
+async def admin_clear_data_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    await q.message.reply_text(
+        "⚠️ مسح بيانات البوت\n\n"
+        "سيتم حذف السجلات والتقارير والبيانات التشغيلية فقط.\n"
+        "لن يتم حذف الحسابات أو الأقسام أو أسئلة النماذج.\n\n"
+        "هل أنت متأكد؟",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗑 نعم، مسح البيانات", callback_data="m:clear_data_confirm")],
+            [InlineKeyboardButton("❌ إلغاء", callback_data="admin:menu")],
+        ]),
+    )
+
+
+@admin_only
+async def admin_clear_data_confirm(update, context):
+    q = update.callback_query
+    await q.answer()
+    conn = db()
+    cur = conn.cursor()
+    # الجداول التشغيلية فقط؛ الحسابات والأقسام والأسئلة والجلسات الإدارية تبقى.
+    tables = (
+        "dewan",
+        "tenants",
+        "migrants",
+        "reports",
+        "amn_afrad",
+        "amn_alamlen",
+        "generic_entries",
+    )
+    try:
+        for table in tables:
+            cur.execute(f'DELETE FROM "{table}"')
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        log.exception("Failed to clear operational data")
+        await q.message.reply_text("❌ تعذر مسح البيانات. لم يتم تغيير شيء.")
+        return
+    finally:
+        cur.close()
+        conn.close()
+
+    await q.message.reply_text(
+        "✅ تم مسح جميع البيانات التشغيلية والتقارير بنجاح.\n"
+        "الحسابات والأقسام والأسئلة محفوظة."
+    )
+    await manager_menu(update, context)
 
 
 @admin_only
@@ -4456,6 +4568,34 @@ def main():
         CallbackQueryHandler(
             admin_user_action,
             pattern=r"^m:user:\d+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_delete_user_start,
+            pattern=r"^m:delete_user:\d+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_delete_user_confirm,
+            pattern=r"^m:delete_user_confirm:\d+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_clear_data_start,
+            pattern=r"^m:clear_data$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_clear_data_confirm,
+            pattern=r"^m:clear_data_confirm$",
         )
     )
 
