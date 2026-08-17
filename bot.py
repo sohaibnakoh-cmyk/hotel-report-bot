@@ -10,7 +10,13 @@ from functools import wraps
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -20,6 +26,7 @@ from telegram.ext import (
     ConversationHandler,
     filters,
 )
+
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
@@ -31,6 +38,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+
 log = logging.getLogger("department_bot")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -75,7 +83,6 @@ DEFAULT_SECTIONS = [
     EDIT_ACCOUNT_SELECT,
     EDIT_ACCOUNT_PASSWORD,
 
-    # الديوان
     DEWAN_KIND,
     DEWAN_RECIPIENT,
     DEWAN_BOOK_NO,
@@ -84,42 +91,35 @@ DEFAULT_SECTIONS = [
     DEWAN_NOT_COMPLETED,
     DEWAN_REASON,
 
-    # العقارات
     TENANT_NAME,
     TENANT_NATIONALITY,
     TENANT_PROPERTY,
     TENANT_PHONE,
     TENANT_NOTES,
 
-    # عربي / أجنبي
     MIG_PROVINCE,
     MIG_ARAB,
     MIG_FOREIGN,
     MIG_STATUS,
 
-    # التقارير
     REP_REQUIRED,
     REP_COMPLETED,
     REP_IMPOSSIBLE,
     REP_NOTES,
 
-    # أمن الأفراد
     AFRAD_SESSIONS,
     AFRAD_NOTES,
 
-    # أمن العاملين
     ALAMLEN_ROUNDS,
     ALAMLEN_LOCATION,
     ALAMLEN_NOTES,
 
-    # عام
     GENERIC_TEXT,
-
-    # تعميم
     BROADCAST_TEXT,
+
 ) = range(36)
 
-# حالات إدارة أسئلة الأقسام (نصوص لتجنب أخطاء range/unpack)
+
 SECTION_Q_ADD = "section_q_add"
 SECTION_Q_EDIT = "section_q_edit"
 
@@ -144,7 +144,8 @@ def init_db():
     conn = db()
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS sections (
             id SERIAL PRIMARY KEY,
             code VARCHAR(50) UNIQUE NOT NULL,
@@ -176,23 +177,16 @@ def init_db():
             id SERIAL PRIMARY KEY,
             user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             kind VARCHAR(20) NOT NULL,
-
             recipient TEXT NOT NULL DEFAULT '',
             book_number TEXT NOT NULL DEFAULT '',
-
             required_count INTEGER DEFAULT 0,
             completed_count INTEGER DEFAULT 0,
             not_completed_count INTEGER DEFAULT 0,
-
             reason TEXT,
-
             status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
-
             linked_dewan_id INTEGER REFERENCES dewan(id) ON DELETE SET NULL,
-
             sent_to_admin BOOLEAN NOT NULL DEFAULT FALSE,
             sent_at TIMESTAMP,
-
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -273,7 +267,8 @@ def init_db():
             enabled BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-    """)
+        """
+    )
 
     # --------------------------------------------------------
     # تحديث جدول الديوان القديم
@@ -340,8 +335,7 @@ def init_db():
         cur.execute(
             f"""
             ALTER TABLE {table}
-            ADD COLUMN IF NOT EXISTS sent_to_admin
-            BOOLEAN NOT NULL DEFAULT FALSE
+            ADD COLUMN IF NOT EXISTS sent_to_admin BOOLEAN NOT NULL DEFAULT FALSE
             """
         )
 
@@ -367,48 +361,97 @@ def init_db():
         )
 
     # --------------------------------------------------------
-    # الأسئلة الافتراضية لإدارة نماذج الأقسام
+    # الأسئلة الافتراضية
     # --------------------------------------------------------
+
     default_questions = {
         ("DEWAN", "out"): [
-            "الجهة المرسل إليها", "رقم الكتاب", "العدد المطلوب",
-            "العدد المنجز", "العدد غير المنجز", "سبب عدم الإنجاز",
+            "الجهة المرسل إليها",
+            "رقم الكتاب",
+            "العدد المطلوب",
+            "العدد المنجز",
+            "العدد غير المنجز",
+            "سبب عدم الإنجاز",
         ],
         ("DEWAN", "in"): [
-            "الجهة المرسل منها", "رقم الكتاب", "العدد المطلوب",
-            "العدد المنجز", "العدد غير المنجز", "سبب عدم الإنجاز",
+            "الجهة المرسل منها",
+            "رقم الكتاب",
+            "العدد المطلوب",
+            "العدد المنجز",
+            "العدد غير المنجز",
+            "سبب عدم الإنجاز",
         ],
         ("AKARAT", "main"): [
-            "اسم المستأجر", "الجنسية", "العقار", "رقم الهاتف", "الملاحظات",
+            "اسم المستأجر",
+            "الجنسية",
+            "العقار",
+            "رقم الهاتف",
+            "الملاحظات",
         ],
         ("MIGRANTS", "main"): [
-            "اسم المحافظة", "عدد العرب", "عدد الأجانب", "الحالة / الملاحظات",
+            "اسم المحافظة",
+            "عدد العرب",
+            "عدد الأجانب",
+            "الحالة / الملاحظات",
         ],
         ("TQARER", "main"): [
-            "العدد المطلوب", "العدد المنجز", "العدد المتعذر", "الملاحظات",
+            "العدد المطلوب",
+            "العدد المنجز",
+            "العدد المتعذر",
+            "الملاحظات",
         ],
         ("AMN_AFRAD", "main"): [
-            "عدد الجلسات", "الملاحظات",
+            "عدد الجلسات",
+            "الملاحظات",
         ],
         ("AMN_ALAMLEN", "main"): [
-            "عدد الجولات", "الموقع", "الملاحظات",
+            "عدد الجولات",
+            "الموقع",
+            "الملاحظات",
         ],
     }
+
     for (section_code, form_code), questions in default_questions.items():
-        cur.execute("SELECT 1 FROM sections WHERE code=%s", (section_code,))
+
+        cur.execute(
+            "SELECT 1 FROM sections WHERE code=%s",
+            (section_code,),
+        )
+
         if not cur.fetchone():
             continue
+
         cur.execute(
-            "SELECT COUNT(*) AS c FROM section_questions WHERE section_code=%s AND form_code=%s",
+            """
+            SELECT COUNT(*) AS c
+            FROM section_questions
+            WHERE section_code=%s
+              AND form_code=%s
+            """,
             (section_code, form_code),
         )
-        if cur.fetchone()["c"] == 0:
+
+        count = cur.fetchone()["c"]
+
+        if count == 0:
             for order, question_text in enumerate(questions, 1):
                 cur.execute(
-                    """INSERT INTO section_questions
-                       (section_code, form_code, question_text, sort_order)
-                       VALUES(%s,%s,%s,%s)""",
-                    (section_code, form_code, question_text, order),
+                    """
+                    INSERT INTO section_questions
+                    (
+                        section_code,
+                        form_code,
+                        question_text,
+                        sort_order
+                    )
+                    VALUES(%s,%s,%s,%s)
+                    """,
+                    (
+                        section_code,
+                        form_code,
+                        question_text,
+                        order,
+                    ),
                 )
 
     conn.commit()
@@ -433,7 +476,8 @@ def get_user(telegram_id):
             s.name AS section_name,
             s.enabled AS section_enabled
         FROM users u
-        LEFT JOIN sections s ON s.code = u.module
+        LEFT JOIN sections s
+            ON s.code = u.module
         WHERE u.telegram_id=%s
         """,
         (telegram_id,),
@@ -458,7 +502,8 @@ def get_user_by_id(uid):
             s.name AS section_name,
             s.enabled AS section_enabled
         FROM users u
-        LEFT JOIN sections s ON s.code = u.module
+        LEFT JOIN sections s
+            ON s.code = u.module
         WHERE u.id=%s
         """,
         (uid,),
@@ -523,6 +568,27 @@ def get_section(code):
     return row
 
 
+def get_section_by_id(section_id):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT *
+        FROM sections
+        WHERE id=%s
+        """,
+        (section_id,),
+    )
+
+    row = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    return row
+
+
 def is_admin(update):
     return bool(
         update.effective_user
@@ -533,12 +599,15 @@ def is_admin(update):
 def admin_only(func):
     @wraps(func)
     async def wrapper(update, context, *args, **kwargs):
+
         if not is_admin(update):
+
             if update.callback_query:
                 await update.callback_query.answer(
                     "غير مصرح لك.",
                     show_alert=True,
                 )
+
             elif update.message:
                 await update.message.reply_text(
                     "غير مصرح لك."
@@ -546,7 +615,12 @@ def admin_only(func):
 
             return
 
-        return await func(update, context, *args, **kwargs)
+        return await func(
+            update,
+            context,
+            *args,
+            **kwargs,
+        )
 
     return wrapper
 
@@ -561,9 +635,7 @@ WELCOME_TEXT = """بِسْمِ اللهِ الرَّحْمَنِ الرَّحِ�
 
 أهلًا وسهلًا بكم في نظام المتابعة والتقارير.
 
-هذا النظام مخصص للمستخدمين الذين لديهم حساب معتمد.
-بعد تسجيل الدخول ستظهر لك واجهة القسم المخصص لك،
-ومن خلالها تستطيع إدخال البيانات وإرسالها إلى الإدارة.
+هذا النظام مخصص للمستخدمين الذين لديهم حساب معتمد. بعد تسجيل الدخول ستظهر لك واجهة القسم المخصص لك، ومن خلالها تستطيع إدخال البيانات وإرسالها إلى الإدارة.
 
 نتمنى لكم التوفيق والسداد."""
 
@@ -588,9 +660,7 @@ def welcome_keyboard():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # لا نمسح حالة المستخدم المسجل إلا إذا طلب تسجيل الخروج.
-    # تسجيل الدخول يبقى محفوظًا في قاعدة البيانات حتى يسجل المستخدم
-    # الخروج بنفسه أو يقوم المدير بطرده/تعطيله.
+
     if is_admin(update):
         await update.message.reply_text(
             WELCOME_TEXT,
@@ -610,7 +680,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(update.effective_user.id)
 
     if user and user["enabled"]:
-        # المستخدم مسجل مسبقًا، ندخله مباشرة إلى قسمه.
         context.user_data["user_id"] = user["id"]
         await user_menu(update, context)
         return ConversationHandler.END
@@ -624,22 +693,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def public_callback(update, context):
+
     q = update.callback_query
     await q.answer()
 
     if q.data == "public:info":
+
         await q.message.reply_text(
             "🔹 هذا النظام مخصص للمستخدمين الذين تم إنشاء حساباتهم من قبل الإدارة.\n"
             "🔹 إذا كان لديك اسم مستخدم وكلمة مرور اضغط على «تسجيل الدخول».\n"
             "🔹 إذا لم يكن لديك حساب، تواصل مع الإدارة."
         )
-        return
+
+        return ConversationHandler.END
 
     if q.data == "public:login":
+
         await q.message.reply_text(
             "🔐 أرسل اسم المستخدم:"
         )
+
         return LOGIN_USERNAME
+
+    return ConversationHandler.END
 
 
 # ============================================================
@@ -647,11 +723,13 @@ async def public_callback(update, context):
 # ============================================================
 
 async def setup_bot_commands(application):
-    # يظهر زر Start الرسمي في قائمة أوامر Telegram، ولا يحتاج المستخدم
-    # إلى كتابة /start يدويًا.
+
     await application.bot.set_my_commands(
         [
-            ("start", "🚀 بدء تشغيل النظام"),
+            (
+                "start",
+                "🚀 بدء تشغيل النظام",
+            )
         ]
     )
 
@@ -661,13 +739,16 @@ async def setup_bot_commands(application):
 # ============================================================
 
 async def login_start(update, context):
+
     await update.message.reply_text(
         "🔐 أرسل اسم المستخدم:"
     )
+
     return LOGIN_USERNAME
 
 
 async def login_username(update, context):
+
     context.user_data["login_username"] = (
         update.message.text.strip()
     )
@@ -680,6 +761,7 @@ async def login_username(update, context):
 
 
 async def login_password(update, context):
+
     username = context.user_data.get(
         "login_username",
         "",
@@ -709,6 +791,7 @@ async def login_password(update, context):
             password,
         )
     ):
+
         cur.close()
         conn.close()
 
@@ -720,7 +803,7 @@ async def login_password(update, context):
 
         return ConversationHandler.END
 
-    # حساب واحد مرتبط بحساب Telegram واحد
+    # حساب Telegram واحد فقط
     cur.execute(
         """
         UPDATE users
@@ -784,20 +867,28 @@ async def login_password(update, context):
         f"أهلًا وسهلًا بك في قسمك."
     )
 
-    await user_menu(update, context)
+    await user_menu(
+        update,
+        context,
+    )
 
     return ConversationHandler.END
 
 
 async def logout(update, context):
+
     uid = context.user_data.get("user_id")
 
     if not uid and update.effective_user:
-        existing = get_user(update.effective_user.id)
+        existing = get_user(
+            update.effective_user.id
+        )
+
         if existing:
             uid = existing["id"]
 
     if uid:
+
         conn = db()
         cur = conn.cursor()
 
@@ -833,17 +924,23 @@ async def logout(update, context):
 
     context.user_data.clear()
 
+    message = (
+        "👋 تم تسجيل الخروج بنجاح.\n\n"
+        "اضغط /start للبدء."
+    )
+
     if update.callback_query:
+
         await update.callback_query.answer()
 
         await update.callback_query.message.reply_text(
-            "👋 تم تسجيل الخروج بنجاح.\n\n"
-            "اضغط /start للبدء."
+            message
         )
+
     else:
+
         await update.message.reply_text(
-            "👋 تم تسجيل الخروج بنجاح.\n\n"
-            "اضغط /start للبدء."
+            message
         )
 
     return ConversationHandler.END
@@ -854,6 +951,7 @@ async def logout(update, context):
 # ============================================================
 
 async def manager_menu(update, context):
+
     text = (
         "🛠 لوحة الإدارة\n\n"
         "مرحبًا بك في لوحة التحكم.\n"
@@ -903,13 +1001,22 @@ async def manager_menu(update, context):
         ],
     ]
 
-    await send_menu(update, text, kb)
+    await send_menu(
+        update,
+        text,
+        kb,
+    )
 
 
 @admin_only
 async def admin_menu_callback(update, context):
+
     await update.callback_query.answer()
-    await manager_menu(update, context)
+
+    await manager_menu(
+        update,
+        context,
+    )
 
 
 # ============================================================
@@ -918,19 +1025,23 @@ async def admin_menu_callback(update, context):
 
 @admin_only
 async def admin_create_start(update, context):
+
     await update.callback_query.answer()
 
     sections = get_sections()
 
     if not sections:
+
         await update.callback_query.message.reply_text(
             "❌ لا توجد أقسام. أضف قسمًا أولًا."
         )
+
         return ConversationHandler.END
 
     kb = []
 
     for section in sections:
+
         kb.append(
             [
                 InlineKeyboardButton(
@@ -961,6 +1072,7 @@ async def admin_create_start(update, context):
 
 @admin_only
 async def admin_create_section(update, context):
+
     q = update.callback_query
     await q.answer()
 
@@ -969,9 +1081,11 @@ async def admin_create_section(update, context):
     section = get_section(code)
 
     if not section:
+
         await q.message.reply_text(
             "❌ القسم غير موجود."
         )
+
         return ConversationHandler.END
 
     context.user_data["new_module"] = section["code"]
@@ -985,13 +1099,16 @@ async def admin_create_section(update, context):
 
 @admin_only
 async def admin_create_username(update, context):
+
     username = update.message.text.strip()
 
     if len(username) < 3:
+
         await update.message.reply_text(
             "❌ اسم المستخدم يجب أن يكون "
             "3 أحرف/أرقام على الأقل."
         )
+
         return CREATE_USERNAME
 
     context.user_data["new_username"] = username
@@ -1005,13 +1122,16 @@ async def admin_create_username(update, context):
 
 @admin_only
 async def admin_create_password(update, context):
+
     password = update.message.text or ""
 
     if len(password) < 4:
+
         await update.message.reply_text(
             "❌ كلمة المرور يجب أن تكون "
             "4 أحرف/أرقام على الأقل."
         )
+
         return CREATE_PASSWORD
 
     context.user_data["new_password"] = password
@@ -1025,6 +1145,7 @@ async def admin_create_password(update, context):
     cur = conn.cursor()
 
     try:
+
         cur.execute(
             """
             INSERT INTO users(
@@ -1052,6 +1173,7 @@ async def admin_create_password(update, context):
         )
 
     except psycopg2.errors.UniqueViolation:
+
         conn.rollback()
 
         await update.message.reply_text(
@@ -1064,15 +1186,54 @@ async def admin_create_password(update, context):
 
         return CREATE_USERNAME
 
-    finally:
+    except Exception:
+
+        conn.rollback()
+
+        log.exception(
+            "Failed to create user"
+        )
+
+        await update.message.reply_text(
+            "❌ حدث خطأ أثناء إنشاء الحساب."
+        )
+
         cur.close()
         conn.close()
 
-    context.user_data.pop("new_username", None)
-    context.user_data.pop("new_password", None)
-    context.user_data.pop("new_module", None)
+        return CREATE_PASSWORD
 
-    await manager_menu(update, context)
+    finally:
+
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    context.user_data.pop(
+        "new_username",
+        None,
+    )
+
+    context.user_data.pop(
+        "new_password",
+        None,
+    )
+
+    context.user_data.pop(
+        "new_module",
+        None,
+    )
+
+    await manager_menu(
+        update,
+        context,
+    )
 
     return ConversationHandler.END
 
@@ -1083,6 +1244,7 @@ async def admin_create_password(update, context):
 
 @admin_only
 async def add_section_start(update, context):
+
     q = update.callback_query
     await q.answer()
 
@@ -1096,12 +1258,15 @@ async def add_section_start(update, context):
 
 @admin_only
 async def add_section_name(update, context):
+
     name = update.message.text.strip()
 
     if not name:
+
         await update.message.reply_text(
             "❌ أرسل اسمًا صحيحًا للقسم:"
         )
+
         return ADD_SECTION_NAME
 
     context.user_data["new_section_name"] = name
@@ -1119,14 +1284,17 @@ async def add_section_name(update, context):
 
 @admin_only
 async def add_section_code(update, context):
+
     code = update.message.text.strip().upper()
 
     if not code or not code.replace("_", "").isalnum():
+
         await update.message.reply_text(
             "❌ الرمز يجب أن يحتوي على أحرف/أرقام "
             "وشرطة سفلية فقط.\n"
             "مثال: OPERATIONS"
         )
+
         return ADD_SECTION_CODE
 
     name = context.user_data["new_section_name"]
@@ -1135,12 +1303,16 @@ async def add_section_code(update, context):
     cur = conn.cursor()
 
     try:
+
         cur.execute(
             """
             INSERT INTO sections(code, name)
             VALUES(%s,%s)
             """,
-            (code, name),
+            (
+                code,
+                name,
+            ),
         )
 
         conn.commit()
@@ -1148,11 +1320,11 @@ async def add_section_code(update, context):
         await update.message.reply_text(
             f"✅ تمت إضافة القسم.\n\n"
             f"📂 الاسم: {name}\n"
-            f"🔤 الرمز: {code}\n\n"
-            f"يمكنك الآن إنشاء حساب واختيار هذا القسم."
+            f"🔤 الرمز: {code}"
         )
 
     except psycopg2.errors.UniqueViolation:
+
         conn.rollback()
 
         await update.message.reply_text(
@@ -1166,30 +1338,53 @@ async def add_section_code(update, context):
         return ADD_SECTION_CODE
 
     finally:
-        cur.close()
-        conn.close()
+
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     context.user_data.pop(
         "new_section_name",
         None,
     )
 
-    await manager_menu(update, context)
+    await manager_menu(
+        update,
+        context,
+    )
 
     return ConversationHandler.END
 
 
+# ============================================================
+# إدارة الأقسام
+# ============================================================
+
 @admin_only
 async def admin_sections(update, context):
+
     q = update.callback_query
     await q.answer()
 
-    sections = get_sections(enabled_only=False)
+    sections = get_sections(
+        enabled_only=False
+    )
 
     kb = []
 
     for s in sections:
-        status = "🟢" if s["enabled"] else "🔴"
+
+        status = (
+            "🟢"
+            if s["enabled"]
+            else "🔴"
+        )
 
         kb.append(
             [
@@ -1222,269 +1417,1120 @@ async def admin_sections(update, context):
 # ============================================================
 
 def get_section_question_forms(code):
+
     if code == "DEWAN":
-        return [("out", "📤 الصادر"), ("in", "📥 الوارد")]
+        return [
+            ("out", "📤 الصادر"),
+            ("in", "📥 الوارد"),
+        ]
+
     if code == "AKARAT":
-        return [("main", "📝 نموذج العقارات")]
+        return [
+            ("main", "📝 نموذج العقارات")
+        ]
+
     if code == "MIGRANTS":
-        return [("main", "📝 نموذج عربي / أجنبي")]
+        return [
+            ("main", "📝 نموذج عربي / أجنبي")
+        ]
+
     if code == "TQARER":
-        return [("main", "📝 نموذج التقارير")]
+        return [
+            ("main", "📝 نموذج التقارير")
+        ]
+
     if code == "AMN_AFRAD":
-        return [("main", "📝 نموذج أمن الأفراد")]
+        return [
+            ("main", "📝 نموذج أمن الأفراد")
+        ]
+
     if code == "AMN_ALAMLEN":
-        return [("main", "📝 نموذج أمن العاملين")]
-    return [("main", "📝 النموذج العام")]
+        return [
+            ("main", "📝 نموذج أمن العاملين")
+        ]
+
+    return [
+        ("main", "📝 النموذج العام")
+    ]
 
 
-def get_section_questions(section_code, form_code):
+def get_section_questions(
+    section_code,
+    form_code,
+):
+
     conn = db()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT id, question_text, sort_order, enabled
+
+    cur.execute(
+        """
+        SELECT
+            id,
+            question_text,
+            sort_order,
+            enabled
         FROM section_questions
-        WHERE section_code=%s AND form_code=%s
+        WHERE section_code=%s
+          AND form_code=%s
         ORDER BY sort_order, id
-    """, (section_code, form_code))
+        """,
+        (
+            section_code,
+            form_code,
+        ),
+    )
+
     rows = cur.fetchall()
+
     cur.close()
     conn.close()
+
     return rows
 
 
 @admin_only
 async def admin_section_action(update, context):
+
     q = update.callback_query
     await q.answer()
-    section_id = int(q.data.split(":")[1])
-    section = get_section_by_id(section_id)
+
+    section_id = int(
+        q.data.split(":")[1]
+    )
+
+    section = get_section_by_id(
+        section_id
+    )
+
     if not section:
-        await q.message.reply_text("❌ القسم غير موجود.")
+
+        await q.message.reply_text(
+            "❌ القسم غير موجود."
+        )
+
         return
 
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) AS c FROM users WHERE module=%s", (section["code"],))
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM users
+        WHERE module=%s
+        """,
+        (section["code"],),
+    )
+
     total = cur.fetchone()["c"]
-    cur.execute("SELECT COUNT(*) AS c FROM users WHERE module=%s AND enabled=TRUE", (section["code"],))
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM users
+        WHERE module=%s
+          AND enabled=TRUE
+        """,
+        (section["code"],),
+    )
+
     active = cur.fetchone()["c"]
-    cur.execute("SELECT COUNT(*) AS c FROM users WHERE module=%s AND enabled=FALSE", (section["code"],))
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM users
+        WHERE module=%s
+          AND enabled=FALSE
+        """,
+        (section["code"],),
+    )
+
     disabled = cur.fetchone()["c"]
+
     cur.close()
     conn.close()
 
     text = (
-        f"📂 <b>إدارة القسم</b>\n\n"
+        f"📂 إدارة القسم\n\n"
         f"{section['name']}\n\n"
         f"👥 المستخدمون: {total}\n"
         f"🟢 النشطون: {active}\n"
         f"🔴 المعطلون: {disabled}\n\n"
         f"📝 نماذج القسم:"
     )
+
     kb = []
-    for form_code, form_name in get_section_question_forms(section["code"]):
-        kb.append([InlineKeyboardButton(form_name, callback_data=f"section:form:{section_id}:{form_code}")])
+
+    for form_code, form_name in get_section_question_forms(
+        section["code"]
+    ):
+        kb.append(
+            [
+                InlineKeyboardButton(
+                    form_name,
+                    callback_data=(
+                        f"section:form:"
+                        f"{section_id}:"
+                        f"{form_code}"
+                    ),
+                )
+            ]
+        )
+
     kb += [
-        [InlineKeyboardButton("⚙️ إعدادات القسم", callback_data=f"section:settings:{section_id}")],
-        [InlineKeyboardButton("👥 مستخدمو القسم", callback_data=f"section:users:{section_id}")],
-        [InlineKeyboardButton("↩️ رجوع", callback_data="m:sections")],
+        [
+            InlineKeyboardButton(
+                "⚙️ إعدادات القسم",
+                callback_data=(
+                    f"section:settings:{section_id}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "👥 مستخدمو القسم",
+                callback_data=(
+                    f"section:users:{section_id}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "↩️ رجوع",
+                callback_data="m:sections",
+            )
+        ],
     ]
-    await q.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+
+    await q.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
 
 @admin_only
 async def admin_section_form(update, context):
+
     q = update.callback_query
     await q.answer()
-    _, _, section_id, form_code = q.data.split(":", 3)
-    section = get_section_by_id(int(section_id))
+
+    parts = q.data.split(":", 3)
+
+    section_id = int(parts[2])
+    form_code = parts[3]
+
+    section = get_section_by_id(
+        section_id
+    )
+
     if not section:
-        await q.message.reply_text("❌ القسم غير موجود.")
+
+        await q.message.reply_text(
+            "❌ القسم غير موجود."
+        )
+
         return
-    questions = get_section_questions(section["code"], form_code)
-    form_title = dict(get_section_question_forms(section["code"])).get(form_code, "📝 النموذج")
+
+    questions = get_section_questions(
+        section["code"],
+        form_code,
+    )
+
+    form_title = dict(
+        get_section_question_forms(
+            section["code"]
+        )
+    ).get(
+        form_code,
+        "📝 النموذج",
+    )
+
     text = f"{form_title}\n\n"
+
     if questions:
-        for i, row in enumerate(questions, 1):
-            status = "🟢" if row["enabled"] else "🔴"
-            text += f"{i}️⃣ {row['question_text']} {status}\n"
+
+        for i, row in enumerate(
+            questions,
+            1,
+        ):
+
+            status = (
+                "🟢"
+                if row["enabled"]
+                else "🔴"
+            )
+
+            text += (
+                f"{i}️⃣ "
+                f"{html.escape(row['question_text'])} "
+                f"{status}\n"
+            )
+
     else:
+
         text += "لا توجد أسئلة حاليًا.\n"
+
     kb = [
-        [InlineKeyboardButton("➕ إضافة سؤال", callback_data=f"sq:add:{section_id}:{form_code}")],
-        [InlineKeyboardButton("✏️ تعديل سؤال", callback_data=f"sq:edit:{section_id}:{form_code}")],
-        [InlineKeyboardButton("🗑 حذف سؤال", callback_data=f"sq:delete:{section_id}:{form_code}")],
-        [InlineKeyboardButton("↕️ ترتيب الأسئلة", callback_data=f"sq:order:{section_id}:{form_code}")],
-        [InlineKeyboardButton("↩️ رجوع للقسم", callback_data=f"section_action:{section_id}")],
+        [
+            InlineKeyboardButton(
+                "➕ إضافة سؤال",
+                callback_data=(
+                    f"sq:add:"
+                    f"{section_id}:"
+                    f"{form_code}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "✏️ تعديل سؤال",
+                callback_data=(
+                    f"sq:edit:"
+                    f"{section_id}:"
+                    f"{form_code}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🗑 حذف سؤال",
+                callback_data=(
+                    f"sq:delete:"
+                    f"{section_id}:"
+                    f"{form_code}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "↕️ ترتيب الأسئلة",
+                callback_data=(
+                    f"sq:order:"
+                    f"{section_id}:"
+                    f"{form_code}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "↩️ رجوع للقسم",
+                callback_data=(
+                    f"section_action:{section_id}"
+                ),
+            )
+        ],
     ]
-    await q.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+
+    await q.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
 
 @admin_only
 async def admin_section_settings(update, context):
+
     q = update.callback_query
     await q.answer()
-    section_id = int(q.data.split(":")[2])
-    section = get_section_by_id(section_id)
+
+    section_id = int(
+        q.data.split(":")[2]
+    )
+
+    section = get_section_by_id(
+        section_id
+    )
+
     if not section:
         return
-    action = "تعطيل" if section["enabled"] else "تفعيل"
+
+    action = (
+        "تعطيل"
+        if section["enabled"]
+        else "تفعيل"
+    )
+
     await q.message.reply_text(
-        f"⚙️ إعدادات القسم\n\n📂 {section['name']}\n"
-        f"الحالة الحالية: {'🟢 فعال' if section['enabled'] else '🔴 معطل'}",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"{('🔴' if section['enabled'] else '🟢')} {action} القسم", callback_data=f"section:toggle:{section_id}")],
-            [InlineKeyboardButton("↩️ رجوع", callback_data=f"section_action:{section_id}")],
-        ]),
+        f"⚙️ إعدادات القسم\n\n"
+        f"📂 {section['name']}\n"
+        f"الحالة الحالية: "
+        f"{'🟢 فعال' if section['enabled'] else '🔴 معطل'}",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        (
+                            "🔴 "
+                            if section["enabled"]
+                            else "🟢 "
+                        )
+                        + action
+                        + " القسم",
+                        callback_data=(
+                            f"section:toggle:"
+                            f"{section_id}"
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "↩️ رجوع",
+                        callback_data=(
+                            f"section_action:"
+                            f"{section_id}"
+                        ),
+                    )
+                ],
+            ]
+        ),
     )
 
 
 @admin_only
 async def admin_section_toggle(update, context):
+
     q = update.callback_query
     await q.answer()
-    section_id = int(q.data.split(":")[2])
-    conn = db(); cur = conn.cursor()
-    cur.execute("UPDATE sections SET enabled=NOT enabled WHERE id=%s RETURNING enabled", (section_id,))
-    row = cur.fetchone(); conn.commit(); cur.close(); conn.close()
-    await q.message.reply_text("✅ تم تحديث حالة القسم.")
-    await admin_section_action(update, context)
+
+    section_id = int(
+        q.data.split(":")[2]
+    )
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        UPDATE sections
+        SET enabled=NOT enabled
+        WHERE id=%s
+        RETURNING enabled
+        """,
+        (section_id,),
+    )
+
+    row = cur.fetchone()
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    await q.message.reply_text(
+        "✅ تم تحديث حالة القسم."
+    )
+
+    await admin_section_action(
+        update,
+        context,
+    )
 
 
 @admin_only
 async def admin_section_users(update, context):
+
     q = update.callback_query
     await q.answer()
-    section_id = int(q.data.split(":")[2])
-    section = get_section_by_id(section_id)
+
+    section_id = int(
+        q.data.split(":")[2]
+    )
+
+    section = get_section_by_id(
+        section_id
+    )
+
     if not section:
         return
-    conn = db(); cur = conn.cursor()
-    cur.execute("SELECT username, enabled, telegram_id FROM users WHERE module=%s ORDER BY username", (section["code"],))
-    rows = cur.fetchall(); cur.close(); conn.close()
-    text = f"👥 مستخدمو {section['name']}\n\n"
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT
+            username,
+            enabled,
+            telegram_id
+        FROM users
+        WHERE module=%s
+        ORDER BY username
+        """,
+        (section["code"],),
+    )
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    text = (
+        f"👥 مستخدمو {section['name']}\n\n"
+    )
+
     if not rows:
+
         text += "لا يوجد مستخدمون."
+
     else:
+
         for r in rows:
-            text += f"{'🟢' if r['enabled'] else '🔴'} {html.escape(r['username'])} — {'متصل' if r['telegram_id'] else 'غير متصل'}\n"
-    await q.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ رجوع", callback_data=f"section_action:{section_id}")]]))
+
+            text += (
+                f"{'🟢' if r['enabled'] else '🔴'} "
+                f"{html.escape(r['username'])} — "
+                f"{'متصل' if r['telegram_id'] else 'غير متصل'}\n"
+            )
+
+    await q.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "↩️ رجوع",
+                        callback_data=(
+                            f"section_action:{section_id}"
+                        ),
+                    )
+                ]
+            ]
+        ),
+    )
 
 
 @admin_only
 async def section_question_add_start(update, context):
-    q = update.callback_query; await q.answer()
-    _, _, section_id, form_code = q.data.split(":", 3)
-    context.user_data["section_question_target"] = (int(section_id), form_code)
-    await q.message.reply_text("➕ أرسل نص السؤال الجديد:")
+
+    q = update.callback_query
+    await q.answer()
+
+    parts = q.data.split(":", 3)
+
+    section_id = int(parts[2])
+    form_code = parts[3]
+
+    context.user_data[
+        "section_question_target"
+    ] = (
+        section_id,
+        form_code,
+    )
+
+    await q.message.reply_text(
+        "➕ أرسل نص السؤال الجديد:"
+    )
+
     return SECTION_Q_ADD
 
 
 @admin_only
 async def section_question_add_save(update, context):
-    text = (update.message.text or "").strip()
+
+    text = (
+        update.message.text or ""
+    ).strip()
+
     if not text:
-        await update.message.reply_text("❌ لا يمكن أن يكون السؤال فارغًا.")
+
+        await update.message.reply_text(
+            "❌ لا يمكن أن يكون السؤال فارغًا."
+        )
+
         return SECTION_Q_ADD
-    section_id, form_code = context.user_data.get("section_question_target", (None, None))
-    section = get_section_by_id(section_id)
-    if not section:
+
+    section_id, form_code = context.user_data.get(
+        "section_question_target",
+        (None, None),
+    )
+
+    if not section_id:
+
+        await update.message.reply_text(
+            "❌ انتهت العملية. أعد المحاولة."
+        )
+
         return ConversationHandler.END
-    conn = db(); cur = conn.cursor()
-    cur.execute("SELECT COALESCE(MAX(sort_order),0)+1 AS n FROM section_questions WHERE section_code=%s AND form_code=%s", (section["code"], form_code))
+
+    section = get_section_by_id(
+        section_id
+    )
+
+    if not section:
+
+        return ConversationHandler.END
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT COALESCE(MAX(sort_order),0)+1 AS n
+        FROM section_questions
+        WHERE section_code=%s
+          AND form_code=%s
+        """,
+        (
+            section["code"],
+            form_code,
+        ),
+    )
+
     n = cur.fetchone()["n"]
-    cur.execute("INSERT INTO section_questions(section_code,form_code,question_text,sort_order) VALUES(%s,%s,%s,%s)", (section["code"],form_code,text,n))
-    conn.commit(); cur.close(); conn.close()
-    context.user_data.pop("section_question_target", None)
-    await update.message.reply_text("✅ تمت إضافة السؤال.")
+
+    cur.execute(
+        """
+        INSERT INTO section_questions(
+            section_code,
+            form_code,
+            question_text,
+            sort_order
+        )
+        VALUES(%s,%s,%s,%s)
+        """,
+        (
+            section["code"],
+            form_code,
+            text,
+            n,
+        ),
+    )
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    context.user_data.pop(
+        "section_question_target",
+        None,
+    )
+
+    await update.message.reply_text(
+        "✅ تمت إضافة السؤال."
+    )
+
     return ConversationHandler.END
 
 
 @admin_only
 async def section_question_edit_start(update, context):
-    q = update.callback_query; await q.answer()
-    _, _, section_id, form_code = q.data.split(":", 3)
-    questions = get_section_questions(get_section_by_id(int(section_id))["code"], form_code)
-    kb = [[InlineKeyboardButton(f"{i+1}️⃣ {r['question_text']}", callback_data=f"sqedit:{r['id']}:{section_id}:{form_code}")] for i,r in enumerate(questions)]
+
+    q = update.callback_query
+    await q.answer()
+
+    parts = q.data.split(":", 3)
+
+    section_id = int(parts[2])
+    form_code = parts[3]
+
+    section = get_section_by_id(
+        section_id
+    )
+
+    if not section:
+        return ConversationHandler.END
+
+    questions = get_section_questions(
+        section["code"],
+        form_code,
+    )
+
+    kb = []
+
+    for i, r in enumerate(
+        questions
+    ):
+
+        kb.append(
+            [
+                InlineKeyboardButton(
+                    f"{i + 1}️⃣ {r['question_text']}",
+                    callback_data=(
+                        f"sqedit:"
+                        f"{r['id']}:"
+                        f"{section_id}:"
+                        f"{form_code}"
+                    ),
+                )
+            ]
+        )
+
     if not kb:
-        await q.message.reply_text("❌ لا توجد أسئلة لتعديلها."); return
-    await q.message.reply_text("✏️ اختر السؤال:", reply_markup=InlineKeyboardMarkup(kb))
+
+        await q.message.reply_text(
+            "❌ لا توجد أسئلة لتعديلها."
+        )
+
+        return ConversationHandler.END
+
+    await q.message.reply_text(
+        "✏️ اختر السؤال:",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
 
 @admin_only
 async def section_question_edit_select(update, context):
-    q = update.callback_query; await q.answer()
-    _, question_id, section_id, form_code = q.data.split(":", 3)
-    context.user_data["section_question_edit"] = (int(question_id), int(section_id), form_code)
-    await q.message.reply_text("✏️ أرسل النص الجديد للسؤال:")
+
+    q = update.callback_query
+    await q.answer()
+
+    parts = q.data.split(":", 3)
+
+    question_id = int(parts[1])
+    section_id = int(parts[2])
+    form_code = parts[3]
+
+    context.user_data[
+        "section_question_edit"
+    ] = (
+        question_id,
+        section_id,
+        form_code,
+    )
+
+    await q.message.reply_text(
+        "✏️ أرسل النص الجديد للسؤال:"
+    )
+
     return SECTION_Q_EDIT
 
 
 @admin_only
 async def section_question_edit_save(update, context):
-    text = (update.message.text or "").strip()
+
+    text = (
+        update.message.text or ""
+    ).strip()
+
     if not text:
-        await update.message.reply_text("❌ لا يمكن أن يكون السؤال فارغًا.")
+
+        await update.message.reply_text(
+            "❌ لا يمكن أن يكون السؤال فارغًا."
+        )
+
         return SECTION_Q_EDIT
-    question_id, section_id, form_code = context.user_data.get("section_question_edit", (None,None,None))
-    conn=db(); cur=conn.cursor(); cur.execute("UPDATE section_questions SET question_text=%s WHERE id=%s",(text,question_id)); conn.commit(); cur.close(); conn.close()
-    context.user_data.pop("section_question_edit",None)
-    await update.message.reply_text("✅ تم تعديل السؤال.")
+
+    question_id, section_id, form_code = (
+        context.user_data.get(
+            "section_question_edit",
+            (None, None, None),
+        )
+    )
+
+    if not question_id:
+        return ConversationHandler.END
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        UPDATE section_questions
+        SET question_text=%s
+        WHERE id=%s
+        """,
+        (
+            text,
+            question_id,
+        ),
+    )
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    context.user_data.pop(
+        "section_question_edit",
+        None,
+    )
+
+    await update.message.reply_text(
+        "✅ تم تعديل السؤال."
+    )
+
     return ConversationHandler.END
 
 
 @admin_only
 async def section_question_delete_start(update, context):
-    q=update.callback_query; await q.answer()
-    _,_,section_id,form_code=q.data.split(":",3); section=get_section_by_id(int(section_id))
-    questions=get_section_questions(section["code"],form_code)
-    kb=[[InlineKeyboardButton(f"🗑 {i+1}️⃣ {r['question_text']}",callback_data=f"sqdel:{r['id']}:{section_id}:{form_code}")] for i,r in enumerate(questions)]
-    if not kb: await q.message.reply_text("❌ لا توجد أسئلة لحذفها."); return
-    await q.message.reply_text("🗑 اختر السؤال المراد حذفه:",reply_markup=InlineKeyboardMarkup(kb))
+
+    q = update.callback_query
+    await q.answer()
+
+    parts = q.data.split(":", 3)
+
+    section_id = int(parts[2])
+    form_code = parts[3]
+
+    section = get_section_by_id(
+        section_id
+    )
+
+    if not section:
+        return
+
+    questions = get_section_questions(
+        section["code"],
+        form_code,
+    )
+
+    kb = []
+
+    for i, r in enumerate(
+        questions
+    ):
+
+        kb.append(
+            [
+                InlineKeyboardButton(
+                    f"🗑 {i + 1}️⃣ {r['question_text']}",
+                    callback_data=(
+                        f"sqdel:"
+                        f"{r['id']}:"
+                        f"{section_id}:"
+                        f"{form_code}"
+                    ),
+                )
+            ]
+        )
+
+    if not kb:
+
+        await q.message.reply_text(
+            "❌ لا توجد أسئلة لحذفها."
+        )
+
+        return
+
+    await q.message.reply_text(
+        "🗑 اختر السؤال المراد حذفه:",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
 
 @admin_only
 async def section_question_delete(update, context):
-    q=update.callback_query; await q.answer()
-    question_id=int(q.data.split(":")[1]); section_id=int(q.data.split(":")[2])
-    conn=db(); cur=conn.cursor(); cur.execute("DELETE FROM section_questions WHERE id=%s",(question_id,)); conn.commit(); cur.close(); conn.close()
-    await q.message.reply_text("✅ تم حذف السؤال.")
-    await admin_section_form(update, context) if False else None
+
+    q = update.callback_query
+    await q.answer()
+
+    parts = q.data.split(":", 3)
+
+    question_id = int(parts[1])
+    section_id = int(parts[2])
+    form_code = parts[3]
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        DELETE FROM section_questions
+        WHERE id=%s
+        """,
+        (question_id,),
+    )
+
+    deleted = cur.rowcount
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    if deleted:
+
+        await q.message.reply_text(
+            "✅ تم حذف السؤال."
+        )
+
+    else:
+
+        await q.message.reply_text(
+            "❌ السؤال غير موجود."
+        )
+
+    # عرض النموذج من جديد
+    section = get_section_by_id(
+        section_id
+    )
+
+    if section:
+
+        questions = get_section_questions(
+            section["code"],
+            form_code,
+        )
+
+        form_title = dict(
+            get_section_question_forms(
+                section["code"]
+            )
+        ).get(
+            form_code,
+            "📝 النموذج",
+        )
+
+        text = f"{form_title}\n\n"
+
+        if questions:
+
+            for i, row in enumerate(
+                questions,
+                1,
+            ):
+
+                status = (
+                    "🟢"
+                    if row["enabled"]
+                    else "🔴"
+                )
+
+                text += (
+                    f"{i}️⃣ "
+                    f"{html.escape(row['question_text'])} "
+                    f"{status}\n"
+                )
+
+        else:
+
+            text += "لا توجد أسئلة حاليًا.\n"
+
+        kb = [
+            [
+                InlineKeyboardButton(
+                    "➕ إضافة سؤال",
+                    callback_data=(
+                        f"sq:add:"
+                        f"{section_id}:"
+                        f"{form_code}"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "✏️ تعديل سؤال",
+                    callback_data=(
+                        f"sq:edit:"
+                        f"{section_id}:"
+                        f"{form_code}"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🗑 حذف سؤال",
+                    callback_data=(
+                        f"sq:delete:"
+                        f"{section_id}:"
+                        f"{form_code}"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "↕️ ترتيب الأسئلة",
+                    callback_data=(
+                        f"sq:order:"
+                        f"{section_id}:"
+                        f"{form_code}"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "↩️ رجوع للقسم",
+                    callback_data=(
+                        f"section_action:{section_id}"
+                    ),
+                )
+            ],
+        ]
+
+        await q.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
 
 
 @admin_only
 async def section_question_order(update, context):
-    q=update.callback_query; await q.answer()
-    _,_,section_id,form_code=q.data.split(":",3); section=get_section_by_id(int(section_id)); questions=get_section_questions(section["code"],form_code)
-    kb=[]
-    for i,r in enumerate(questions):
-        row=[]
-        if i>0: row.append(InlineKeyboardButton("⬆️",callback_data=f"sqmove:up:{r['id']}:{section_id}:{form_code}"))
-        row.append(InlineKeyboardButton(f"{i+1}️⃣ {r['question_text']}",callback_data="noop"))
-        if i<len(questions)-1: row.append(InlineKeyboardButton("⬇️",callback_data=f"sqmove:down:{r['id']}:{section_id}:{form_code}"))
+
+    q = update.callback_query
+    await q.answer()
+
+    parts = q.data.split(":", 3)
+
+    section_id = int(parts[2])
+    form_code = parts[3]
+
+    section = get_section_by_id(
+        section_id
+    )
+
+    if not section:
+        return
+
+    questions = get_section_questions(
+        section["code"],
+        form_code,
+    )
+
+    kb = []
+
+    for i, r in enumerate(
+        questions
+    ):
+
+        row = []
+
+        if i > 0:
+
+            row.append(
+                InlineKeyboardButton(
+                    "⬆️",
+                    callback_data=(
+                        f"sqmove:up:"
+                        f"{r['id']}:"
+                        f"{section_id}:"
+                        f"{form_code}"
+                    ),
+                )
+            )
+
+        row.append(
+            InlineKeyboardButton(
+                f"{i + 1}️⃣ {r['question_text']}",
+                callback_data="noop",
+            )
+        )
+
+        if i < len(questions) - 1:
+
+            row.append(
+                InlineKeyboardButton(
+                    "⬇️",
+                    callback_data=(
+                        f"sqmove:down:"
+                        f"{r['id']}:"
+                        f"{section_id}:"
+                        f"{form_code}"
+                    ),
+                )
+            )
+
         kb.append(row)
-    kb.append([InlineKeyboardButton("↩️ رجوع",callback_data=f"section:form:{section_id}:{form_code}")])
-    await q.message.reply_text("↕️ ترتيب الأسئلة\n\nاستخدم السهم لرفع أو خفض السؤال:",reply_markup=InlineKeyboardMarkup(kb))
+
+    kb.append(
+        [
+            InlineKeyboardButton(
+                "↩️ رجوع",
+                callback_data=(
+                    f"section:form:"
+                    f"{section_id}:"
+                    f"{form_code}"
+                ),
+            )
+        ]
+    )
+
+    await q.message.reply_text(
+        "↕️ ترتيب الأسئلة\n\n"
+        "استخدم السهم لرفع أو خفض السؤال:",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
 
 @admin_only
 async def section_question_move(update, context):
-    q=update.callback_query; await q.answer()
-    _,direction,qid,section_id,form_code=q.data.split(":",4); qid=int(qid); section_id=int(section_id)
-    section=get_section_by_id(section_id); questions=get_section_questions(section["code"],form_code)
-    idx=next((i for i,r in enumerate(questions) if r["id"]==qid),None)
-    if idx is None: return
-    target=idx-1 if direction=="up" else idx+1
-    if target<0 or target>=len(questions): return
-    conn=db(); cur=conn.cursor(); a=questions[idx]; b=questions[target]
-    cur.execute("UPDATE section_questions SET sort_order=%s WHERE id=%s",(b["sort_order"],a["id"]))
-    cur.execute("UPDATE section_questions SET sort_order=%s WHERE id=%s",(a["sort_order"],b["id"]))
-    conn.commit(); cur.close(); conn.close()
-    await section_question_order(update, context)
 
+    q = update.callback_query
+    await q.answer()
 
-def get_section_by_id(section_id):
-    conn=db(); cur=conn.cursor(); cur.execute("SELECT * FROM sections WHERE id=%s",(section_id,)); row=cur.fetchone(); cur.close(); conn.close(); return row
+    parts = q.data.split(":", 4)
+
+    direction = parts[1]
+    qid = int(parts[2])
+    section_id = int(parts[3])
+    form_code = parts[4]
+
+    section = get_section_by_id(
+        section_id
+    )
+
+    if not section:
+        return
+
+    questions = get_section_questions(
+        section["code"],
+        form_code,
+    )
+
+    idx = next(
+        (
+            i
+            for i, r in enumerate(questions)
+            if r["id"] == qid
+        ),
+        None,
+    )
+
+    if idx is None:
+        return
+
+    if direction == "up":
+        target = idx - 1
+    else:
+        target = idx + 1
+
+    if target < 0 or target >= len(questions):
+        return
+
+    conn = db()
+    cur = conn.cursor()
+
+    a = questions[idx]
+    b = questions[target]
+
+    cur.execute(
+        """
+        UPDATE section_questions
+        SET sort_order=%s
+        WHERE id=%s
+        """,
+        (
+            b["sort_order"],
+            a["id"],
+        ),
+    )
+
+    cur.execute(
+        """
+        UPDATE section_questions
+        SET sort_order=%s
+        WHERE id=%s
+        """,
+        (
+            a["sort_order"],
+            b["id"],
+        ),
+    )
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    await section_question_order(
+        update,
+        context,
+    )
 
 
 # ============================================================
@@ -1493,6 +2539,7 @@ def get_section_by_id(section_id):
 
 @admin_only
 async def admin_edit_start(update, context):
+
     q = update.callback_query
     await q.answer()
 
@@ -1501,7 +2548,11 @@ async def admin_edit_start(update, context):
 
     cur.execute(
         """
-        SELECT id, username, module, enabled
+        SELECT
+            id,
+            username,
+            module,
+            enabled
         FROM users
         ORDER BY username
         """
@@ -1513,15 +2564,22 @@ async def admin_edit_start(update, context):
     conn.close()
 
     if not rows:
+
         await q.message.reply_text(
             "لا توجد حسابات."
         )
+
         return ConversationHandler.END
 
     kb = []
 
     for r in rows:
-        status = "🟢" if r["enabled"] else "🔴"
+
+        status = (
+            "🟢"
+            if r["enabled"]
+            else "🔴"
+        )
 
         kb.append(
             [
@@ -1544,17 +2602,22 @@ async def admin_edit_start(update, context):
 
 @admin_only
 async def admin_edit_account_select(update, context):
+
     q = update.callback_query
     await q.answer()
 
-    uid = int(q.data.split(":")[1])
+    uid = int(
+        q.data.split(":")[1]
+    )
 
     user = get_user_by_id(uid)
 
     if not user:
+
         await q.message.reply_text(
             "❌ الحساب غير موجود."
         )
+
         return ConversationHandler.END
 
     context.user_data["edit_user_id"] = uid
@@ -1576,18 +2639,24 @@ async def admin_edit_account_select(update, context):
 
 @admin_only
 async def admin_edit_account_password(update, context):
+
     password = update.message.text or ""
 
     if len(password) < 4:
+
         await update.message.reply_text(
             "❌ كلمة المرور يجب أن تكون "
             "4 أحرف/أرقام على الأقل."
         )
+
         return EDIT_ACCOUNT_PASSWORD
 
     uid = context.user_data.get(
         "edit_user_id"
     )
+
+    if not uid:
+        return ConversationHandler.END
 
     conn = db()
     cur = conn.cursor()
@@ -1618,7 +2687,10 @@ async def admin_edit_account_password(update, context):
         None,
     )
 
-    await manager_menu(update, context)
+    await manager_menu(
+        update,
+        context,
+    )
 
     return ConversationHandler.END
 
@@ -1629,6 +2701,7 @@ async def admin_edit_account_password(update, context):
 
 @admin_only
 async def admin_users(update, context):
+
     q = update.callback_query
     await q.answer()
 
@@ -1642,9 +2715,11 @@ async def admin_users(update, context):
             u.username,
             u.module,
             u.enabled,
+            u.telegram_id,
             s.name AS section_name
         FROM users u
-        LEFT JOIN sections s ON s.code=u.module
+        LEFT JOIN sections s
+            ON s.code=u.module
         ORDER BY s.name,u.username
         """
     )
@@ -1655,15 +2730,24 @@ async def admin_users(update, context):
     conn.close()
 
     if not rows:
+
         await q.message.reply_text(
-            "👥 الحسابات: 0\n\nلا توجد حسابات."
+            "👥 الحسابات: 0\n\n"
+            "لا توجد حسابات."
         )
+
         return
 
     kb = []
 
     for r in rows:
-        status = "🟢" if r["enabled"] else "🔴"
+
+        status = (
+            "🟢"
+            if r["enabled"]
+            else "🔴"
+        )
+
         section = (
             r["section_name"]
             or r["module"]
@@ -1680,27 +2764,71 @@ async def admin_users(update, context):
             ]
         )
 
+    kb.append(
+        [
+            InlineKeyboardButton(
+                "↩️ لوحة المدير",
+                callback_data="admin:menu",
+            )
+        ]
+    )
+
     await q.message.reply_text(
-        f"👥 الحسابات: {len(rows)}\n\nاختر الحساب المطلوب:",
+        f"👥 الحسابات: {len(rows)}\n\n"
+        "اختر الحساب المطلوب:",
         reply_markup=InlineKeyboardMarkup(kb),
     )
 
 
+# ============================================================
+# صفحة الحساب
+# ============================================================
+
 @admin_only
 async def admin_user_action(update, context):
+
     q = update.callback_query
     await q.answer()
 
-    uid = int(q.data.split(":")[2])
+    uid = int(
+        q.data.split(":")[2]
+    )
 
     u = get_user_by_id(uid)
 
     if not u:
+
+        await q.message.reply_text(
+            "❌ الحساب غير موجود."
+        )
+
         return
 
     section = (
         u["section_name"]
         or u["module"]
+    )
+
+    status_text = (
+        "🟢 فعال"
+        if u["enabled"]
+        else "🔴 معطل"
+    )
+
+    connection_text = (
+        "🟢 متصل"
+        if u["telegram_id"]
+        else "⚪ غير متصل"
+    )
+
+    # ========================================================
+    # هنا تم إضافة زر التفعيل / التعطيل
+    # ========================================================
+
+    toggle_text = (
+        "🔴 تعطيل الحساب"
+        if u["enabled"]
+        else "🟢 تفعيل الحساب"
     )
 
     kb = [
@@ -1709,6 +2837,14 @@ async def admin_user_action(update, context):
                 "🔐 تغيير كلمة المرور",
                 callback_data=(
                     f"edit_account:{uid}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                toggle_text,
+                callback_data=(
+                    f"m:toggleone:{uid}"
                 ),
             )
         ],
@@ -1728,157 +2864,95 @@ async def admin_user_action(update, context):
                 ),
             )
         ],
+        [
+            InlineKeyboardButton(
+                "↩️ رجوع للحسابات",
+                callback_data="m:users",
+            )
+        ],
     ]
 
+    text = (
+        "👤 <b>بيانات الحساب</b>\n\n"
+        f"👤 المستخدم: "
+        f"<b>{html.escape(u['username'])}</b>\n"
+        f"📂 القسم: "
+        f"{html.escape(section)}\n"
+        f"📌 الحالة: {status_text}\n"
+        f"📡 الاتصال: {connection_text}\n"
+        f"🆔 Telegram ID: "
+        f"{u['telegram_id'] or '-'}"
+    )
+
     await q.message.reply_text(
-        f"👤 الحساب: {u['username']}\n"
-        f"📂 القسم: {section}\n"
-        f"الحالة: "
-        f"{'🟢 فعال' if u['enabled'] else '🔴 معطل'}",
+        text,
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(kb),
     )
 
 
-@admin_only
-async def admin_delete_user_start(update, context):
-    q = update.callback_query
-    await q.answer()
-    uid = int(q.data.split(":")[2])
-    u = get_user_by_id(uid)
-    if not u:
-        await q.message.reply_text("❌ الحساب غير موجود.")
-        return
-    section = u["section_name"] or u["module"] or "-"
-    await q.message.reply_text(
-        f"⚠️ تأكيد حذف الحساب\n\n"
-        f"👤 الحساب: {html.escape(u['username'])}\n"
-        f"📂 القسم: {html.escape(section)}\n\n"
-        "سيتم حذف الحساب نهائيًا من النظام، ولن يتمكن من الدخول بعد ذلك.\n"
-        "أما البيانات والتقارير السابقة فستبقى محفوظة دون ربط بهذا الحساب.\n\n"
-        "هل أنت متأكد؟",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🗑 نعم، حذف نهائي", callback_data=f"m:delete_user_confirm:{uid}")],
-            [InlineKeyboardButton("❌ إلغاء", callback_data=f"m:user:{uid}")],
-        ]),
-    )
-
-
-@admin_only
-async def admin_delete_user_confirm(update, context):
-    q = update.callback_query
-    await q.answer()
-    uid = int(q.data.split(":")[3])
-    u = get_user_by_id(uid)
-    if not u:
-        await q.message.reply_text("❌ الحساب غير موجود.")
-        return
-
-    username = u["username"]
-    conn = db()
-    cur = conn.cursor()
-    try:
-        # جميع جداول البيانات المرتبطة بالمستخدم تستخدم ON DELETE SET NULL.
-        # نحذف الحساب فقط، ولا نحذف الأسئلة أو الأقسام.
-        cur.execute("DELETE FROM users WHERE id=%s", (uid,))
-        if cur.rowcount != 1:
-            conn.rollback()
-            await q.message.reply_text("❌ لم يتم العثور على الحساب.")
-            return
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        log.exception("Failed to delete user %s", uid)
-        await q.message.reply_text("❌ تعذر حذف الحساب. لم يتم تغيير شيء.")
-        return
-    finally:
-        cur.close()
-        conn.close()
-
-    await q.message.reply_text(f"✅ تم حذف الحساب {html.escape(username)} نهائيًا.", parse_mode="HTML")
-    await admin_users(update, context)
-
-
-@admin_only
-async def admin_clear_data_start(update, context):
-    q = update.callback_query
-    await q.answer()
-    await q.message.reply_text(
-        "⚠️ مسح بيانات البوت\n\n"
-        "سيتم حذف السجلات والتقارير والبيانات التشغيلية فقط.\n"
-        "لن يتم حذف الحسابات أو الأقسام أو أسئلة النماذج.\n\n"
-        "هل أنت متأكد؟",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🗑 نعم، مسح البيانات", callback_data="m:clear_data_confirm")],
-            [InlineKeyboardButton("❌ إلغاء", callback_data="admin:menu")],
-        ]),
-    )
-
-
-@admin_only
-async def admin_clear_data_confirm(update, context):
-    q = update.callback_query
-    await q.answer()
-    conn = db()
-    cur = conn.cursor()
-    # الجداول التشغيلية فقط؛ الحسابات والأقسام والأسئلة والجلسات الإدارية تبقى.
-    tables = (
-        "dewan",
-        "tenants",
-        "migrants",
-        "reports",
-        "amn_afrad",
-        "amn_alamlen",
-        "generic_entries",
-    )
-    try:
-        for table in tables:
-            cur.execute(f'DELETE FROM "{table}"')
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        log.exception("Failed to clear operational data")
-        await q.message.reply_text("❌ تعذر مسح البيانات. لم يتم تغيير شيء.")
-        return
-    finally:
-        cur.close()
-        conn.close()
-
-    await q.message.reply_text(
-        "✅ تم مسح جميع البيانات التشغيلية والتقارير بنجاح.\n"
-        "الحسابات والأقسام والأسئلة محفوظة."
-    )
-    await manager_menu(update, context)
-
+# ============================================================
+# تعطيل / تفعيل حساب
+# ============================================================
 
 @admin_only
 async def admin_toggle_one(update, context):
+
     q = update.callback_query
     await q.answer()
 
-    uid = int(q.data.split(":")[2])
+    uid = int(
+        q.data.split(":")[2]
+    )
+
+    user = get_user_by_id(uid)
+
+    if not user:
+
+        await q.message.reply_text(
+            "❌ الحساب غير موجود."
+        )
+
+        return
+
+    new_status = not user["enabled"]
 
     conn = db()
     cur = conn.cursor()
 
-    cur.execute(
-        """
-        UPDATE users
-        SET enabled=NOT enabled
-        WHERE id=%s
-        RETURNING enabled
-        """,
-        (uid,),
-    )
+    if new_status:
 
-    row = cur.fetchone()
-
-    if row and not row["enabled"]:
+        # تفعيل
         cur.execute(
             """
             UPDATE users
-            SET telegram_id=NULL
+            SET enabled=TRUE
             WHERE id=%s
+            """,
+            (uid,),
+        )
+
+    else:
+
+        # تعطيل الحساب + قطع اتصاله
+        cur.execute(
+            """
+            UPDATE users
+            SET
+                enabled=FALSE,
+                telegram_id=NULL
+            WHERE id=%s
+            """,
+            (uid,),
+        )
+
+        # إنهاء الجلسات المفتوحة
+        cur.execute(
+            """
+            UPDATE sessions_log
+            SET logout_at=CURRENT_TIMESTAMP
+            WHERE user_id=%s
+              AND logout_at IS NULL
             """,
             (uid,),
         )
@@ -1888,25 +2962,398 @@ async def admin_toggle_one(update, context):
     cur.close()
     conn.close()
 
+    # إذا تم تعطيله نرسل إشعارًا للمستخدم
+    if not new_status and user["telegram_id"]:
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=user["telegram_id"],
+                text=(
+                    "🚫 تم تعطيل حسابك من قبل الإدارة.\n\n"
+                    "لن تتمكن من استخدام النظام حتى يتم تفعيل الحساب."
+                ),
+            )
+
+        except Exception as exc:
+
+            log.warning(
+                "Could not notify disabled user: %s",
+                exc,
+            )
+
     await q.message.reply_text(
-        "✅ تم تغيير حالة الحساب."
+        (
+            "🟢 تم تفعيل الحساب بنجاح."
+            if new_status
+            else "🔴 تم تعطيل الحساب بنجاح."
+        )
     )
 
-    await admin_users(update, context)
+    # إعادة عرض صفحة الحساب
+    await admin_user_action(
+        update,
+        context,
+    )
 
 
 # ============================================================
-# تقارير المدير حسب الأقسام
+# حذف الحساب - شاشة التأكيد
 # ============================================================
 
 @admin_only
-async def admin_sessions(update, context):
+async def admin_delete_user_start(update, context):
+
+    q = update.callback_query
+    await q.answer()
+
+    uid = int(
+        q.data.split(":")[2]
+    )
+
+    u = get_user_by_id(uid)
+
+    if not u:
+
+        await q.message.reply_text(
+            "❌ الحساب غير موجود."
+        )
+
+        return
+
+    section = (
+        u["section_name"]
+        or u["module"]
+        or "-"
+    )
+
+    text = (
+        "⚠️ <b>تأكيد حذف الحساب</b>\n\n"
+        f"👤 الحساب: "
+        f"<b>{html.escape(u['username'])}</b>\n"
+        f"📂 القسم: "
+        f"{html.escape(section)}\n\n"
+        "⚠️ سيتم حذف الحساب نهائيًا من النظام.\n"
+        "البيانات والتقارير السابقة ستبقى محفوظة "
+        "لكن سيتم فصلها عن الحساب.\n\n"
+        "<b>هل أنت متأكد من الحذف؟</b>"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🗑 نعم، حذف نهائي",
+                    callback_data=(
+                        f"m:delete_user_confirm:{uid}"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "❌ لا، إلغاء",
+                    callback_data=(
+                        f"m:user:{uid}"
+                    ),
+                )
+            ],
+        ]
+    )
+
+    # edit_message_text مهم هنا حتى لا تتراكم الرسائل
+    try:
+
+        await q.edit_message_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+
+    except Exception:
+
+        await q.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+
+
+# ============================================================
+# حذف الحساب - تأكيد نهائي
+# ============================================================
+
+@admin_only
+async def admin_delete_user_confirm(update, context):
+
+    q = update.callback_query
+    await q.answer(
+        "جارٍ حذف الحساب..."
+    )
+
+    try:
+
+        uid = int(
+            q.data.split(":")[3]
+        )
+
+    except (
+        ValueError,
+        IndexError,
+    ):
+
+        await q.message.reply_text(
+            "❌ معرف الحساب غير صحيح."
+        )
+
+        return
+
+    u = get_user_by_id(uid)
+
+    if not u:
+
+        await q.answer(
+            "الحساب غير موجود.",
+            show_alert=True,
+        )
+
+        try:
+            await q.edit_message_text(
+                "❌ الحساب غير موجود."
+            )
+        except Exception:
+            pass
+
+        return
+
+    username = u["username"]
+
+    conn = None
+    cur = None
+
+    try:
+
+        conn = db()
+        cur = conn.cursor()
+
+        # أولًا ننهي الجلسات
+        cur.execute(
+            """
+            UPDATE sessions_log
+            SET logout_at=CURRENT_TIMESTAMP
+            WHERE user_id=%s
+              AND logout_at IS NULL
+            """,
+            (uid,),
+        )
+
+        # بسبب ON DELETE SET NULL في جداول البيانات
+        # سيتم الاحتفاظ بالبيانات السابقة
+        cur.execute(
+            """
+            DELETE FROM users
+            WHERE id=%s
+            """,
+            (uid,),
+        )
+
+        if cur.rowcount != 1:
+
+            conn.rollback()
+
+            await q.answer(
+                "لم يتم العثور على الحساب.",
+                show_alert=True,
+            )
+
+            return
+
+        conn.commit()
+
+    except Exception as exc:
+
+        if conn:
+            conn.rollback()
+
+        log.exception(
+            "Failed to delete user %s",
+            uid,
+        )
+
+        await q.answer(
+            "حدث خطأ أثناء حذف الحساب.",
+            show_alert=True,
+        )
+
+        try:
+
+            await q.message.reply_text(
+                "❌ تعذر حذف الحساب.\n\n"
+                "لم يتم تغيير أي بيانات."
+            )
+
+        except Exception:
+            pass
+
+        return
+
+    finally:
+
+        if cur:
+
+            try:
+                cur.close()
+            except Exception:
+                pass
+
+        if conn:
+
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # ========================================================
+    # نجاح الحذف
+    # ========================================================
+
+    try:
+
+        await q.edit_message_text(
+            f"✅ تم حذف الحساب "
+            f"<b>{html.escape(username)}</b> "
+            f"نهائيًا.",
+            parse_mode="HTML",
+        )
+
+    except Exception:
+
+        await q.message.reply_text(
+            f"✅ تم حذف الحساب "
+            f"<b>{html.escape(username)}</b> "
+            f"نهائيًا.",
+            parse_mode="HTML",
+        )
+
+    # عرض الحسابات من جديد
+    await asyncio.sleep(0.3)
+
+    await admin_users(
+        update,
+        context,
+    )
+
+
+# ============================================================
+# مسح البيانات
+# ============================================================
+
+@admin_only
+async def admin_clear_data_start(update, context):
+
+    q = update.callback_query
+    await q.answer()
+
+    await q.message.reply_text(
+        "⚠️ مسح بيانات البوت\n\n"
+        "سيتم حذف السجلات والتقارير والبيانات التشغيلية فقط.\n"
+        "لن يتم حذف الحسابات أو الأقسام أو أسئلة النماذج.\n\n"
+        "هل أنت متأكد؟",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🗑 نعم، مسح البيانات",
+                        callback_data=(
+                            "m:clear_data_confirm"
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ إلغاء",
+                        callback_data="admin:menu",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@admin_only
+async def admin_clear_data_confirm(update, context):
+
     q = update.callback_query
     await q.answer()
 
     conn = db()
     cur = conn.cursor()
-    cur.execute("""
+
+    tables = (
+        "dewan",
+        "tenants",
+        "migrants",
+        "reports",
+        "amn_afrad",
+        "amn_alamlen",
+        "generic_entries",
+    )
+
+    try:
+
+        for table in tables:
+
+            cur.execute(
+                f'DELETE FROM "{table}"'
+            )
+
+        conn.commit()
+
+    except Exception:
+
+        conn.rollback()
+
+        log.exception(
+            "Failed to clear operational data"
+        )
+
+        await q.message.reply_text(
+            "❌ تعذر مسح البيانات. "
+            "لم يتم تغيير شيء."
+        )
+
+        return
+
+    finally:
+
+        cur.close()
+        conn.close()
+
+    await q.message.reply_text(
+        "✅ تم مسح جميع البيانات التشغيلية والتقارير بنجاح.\n"
+        "الحسابات والأقسام والأسئلة محفوظة."
+    )
+
+    await manager_menu(
+        update,
+        context,
+    )
+
+
+# ============================================================
+# التقارير والجلسات
+# ============================================================
+
+@admin_only
+async def admin_sessions(update, context):
+
+    q = update.callback_query
+    await q.answer()
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
         SELECT
             sl.id,
             sl.user_id,
@@ -1918,63 +3365,103 @@ async def admin_sessions(update, context):
             u.module,
             s.name AS section_name
         FROM sessions_log sl
-        LEFT JOIN users u ON u.id = sl.user_id
-        LEFT JOIN sections s ON s.code = u.module
+        LEFT JOIN users u
+            ON u.id=sl.user_id
+        LEFT JOIN sections s
+            ON s.code=u.module
         ORDER BY sl.login_at DESC
         LIMIT 50
-    """)
+        """
+    )
+
     rows = cur.fetchall()
+
     cur.close()
     conn.close()
 
     if not rows:
-        await q.message.reply_text("🕒 لا توجد جلسات مسجلة.")
+
+        await q.message.reply_text(
+            "🕒 لا توجد جلسات مسجلة."
+        )
+
         return
 
     for r in rows:
+
         active = (
             r["logout_at"] is None
             and r["enabled"] is True
             and r["telegram_id"] is not None
         )
 
-        status = "🟢 متصل" if active else "⚪ منتهية"
-        section = r["section_name"] or r["module"] or "-"
+        status = (
+            "🟢 متصل"
+            if active
+            else "⚪ منتهية"
+        )
+
+        section = (
+            r["section_name"]
+            or r["module"]
+            or "-"
+        )
 
         text = (
-            f"👤 المستخدم: {html.escape(r['username'])}\n"
-            f"📂 القسم: {html.escape(section)}\n"
+            f"👤 المستخدم: "
+            f"{html.escape(r['username'])}\n"
+            f"📂 القسم: "
+            f"{html.escape(section)}\n"
             f"🕒 الدخول: {r['login_at']}\n"
-            f"🚪 الخروج: {r['logout_at'] or 'لم يسجل خروجًا'}\n"
+            f"🚪 الخروج: "
+            f"{r['logout_at'] or 'لم يسجل خروجًا'}\n"
             f"الحالة: {status}"
         )
 
         buttons = []
+
         if active and r["user_id"]:
-            buttons.append([
-                InlineKeyboardButton(
-                    "🚫 طرد المستخدم من البوت",
-                    callback_data=f"m:kick:{r['user_id']}",
-                )
-            ])
+
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        "🚫 طرد المستخدم من البوت",
+                        callback_data=(
+                            f"m:kick:{r['user_id']}"
+                        ),
+                    )
+                ]
+            )
 
         await q.message.reply_text(
             text,
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+            reply_markup=(
+                InlineKeyboardMarkup(buttons)
+                if buttons
+                else None
+            ),
         )
 
 
 @admin_only
 async def admin_kick_user(update, context):
+
     q = update.callback_query
     await q.answer()
 
-    uid = int(q.data.split(":")[2])
+    uid = int(
+        q.data.split(":")[2]
+    )
+
     user = get_user_by_id(uid)
 
     if not user:
-        await q.message.reply_text("❌ الحساب غير موجود.")
+
+        await q.message.reply_text(
+            "❌ الحساب غير موجود."
+        )
+
         return
 
     telegram_id = user["telegram_id"]
@@ -1982,33 +3469,45 @@ async def admin_kick_user(update, context):
     conn = db()
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         UPDATE sessions_log
         SET logout_at=CURRENT_TIMESTAMP
         WHERE user_id=%s
           AND logout_at IS NULL
-    """, (uid,))
+        """,
+        (uid,),
+    )
 
-    cur.execute("""
+    cur.execute(
+        """
         UPDATE users
         SET telegram_id=NULL
         WHERE id=%s
-    """, (uid,))
+        """,
+        (uid,),
+    )
 
     conn.commit()
+
     cur.close()
     conn.close()
 
     if telegram_id:
+
         try:
+
             await context.bot.send_message(
                 chat_id=telegram_id,
                 text=(
                     "🚫 تم إنهاء جلستك من قبل الإدارة.\n\n"
-                    "إذا كنت بحاجة إلى الدخول مجددًا، تواصل مع الإدارة."
+                    "إذا كنت بحاجة إلى الدخول مجددًا، "
+                    "تواصل مع الإدارة."
                 ),
             )
+
         except Exception as exc:
+
             log.warning(
                 "Could not notify kicked user %s: %s",
                 user["username"],
@@ -2016,69 +3515,119 @@ async def admin_kick_user(update, context):
             )
 
     await q.message.reply_text(
-        f"🚫 تم طرد المستخدم {user['username']} من البوت بنجاح."
+        f"🚫 تم طرد المستخدم "
+        f"{html.escape(user['username'])} "
+        f"من البوت بنجاح.",
+        parse_mode="HTML",
     )
 
-    # عرض الجلسات من جديد
-    await admin_sessions(update, context)
+    await admin_sessions(
+        update,
+        context,
+    )
 
+
+# ============================================================
+# تقارير الأقسام
+# ============================================================
 
 @admin_only
 async def admin_reports(update, context):
+
     q = update.callback_query
     await q.answer()
 
-    sections = get_sections(enabled_only=False)
+    sections = get_sections(
+        enabled_only=False
+    )
 
     if not sections:
-        await q.message.reply_text("❌ لا توجد أقسام.")
+
+        await q.message.reply_text(
+            "❌ لا توجد أقسام."
+        )
+
         return
 
     kb = []
+
     for section in sections:
-        status = "🟢" if section["enabled"] else "🔴"
-        kb.append([
-            InlineKeyboardButton(
-                f"{status} {section['name']}",
-                callback_data=f"m:reportsection:{section['id']}",
-            )
-        ])
+
+        status = (
+            "🟢"
+            if section["enabled"]
+            else "🔴"
+        )
+
+        kb.append(
+            [
+                InlineKeyboardButton(
+                    f"{status} {section['name']}",
+                    callback_data=(
+                        f"m:reportsection:"
+                        f"{section['id']}"
+                    ),
+                )
+            ]
+        )
 
     await q.message.reply_text(
-        "📊 تقارير الأقسام\n\nاختر القسم الذي تريد الاطلاع على تقريره:",
+        "📊 تقارير الأقسام\n\n"
+        "اختر القسم الذي تريد الاطلاع على تقريره:",
         reply_markup=InlineKeyboardMarkup(kb),
     )
 
 
 @admin_only
 async def admin_report_section(update, context):
+
     q = update.callback_query
     await q.answer()
 
-    section_id = int(q.data.split(":")[2])
-    section = None
+    section_id = int(
+        q.data.split(":")[2]
+    )
 
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM sections WHERE id=%s", (section_id,))
+
+    cur.execute(
+        """
+        SELECT *
+        FROM sections
+        WHERE id=%s
+        """,
+        (section_id,),
+    )
+
     section = cur.fetchone()
 
     if not section:
+
         cur.close()
         conn.close()
-        await q.message.reply_text("❌ القسم غير موجود.")
+
+        await q.message.reply_text(
+            "❌ القسم غير موجود."
+        )
+
         return
 
-    # المستخدمون ضمن القسم
-    cur.execute("""
-        SELECT id, username, enabled
+    cur.execute(
+        """
+        SELECT
+            id,
+            username,
+            enabled
         FROM users
         WHERE module=%s
         ORDER BY username
-    """, (section["code"],))
+        """,
+        (section["code"],),
+    )
+
     users = cur.fetchall()
 
-    # ملخص البيانات المدخلة اليوم حسب المستخدم
     table_map = {
         "DEWAN": "dewan",
         "AKARAT": "tenants",
@@ -2086,123 +3635,246 @@ async def admin_report_section(update, context):
         "AMN_AFRAD": "amn_afrad",
         "AMN_ALAMLEN": "amn_alamlen",
     }
-    table = table_map.get(section["code"], "generic_entries")
+
+    table = table_map.get(
+        section["code"],
+        "generic_entries",
+    )
 
     user_stats = []
+
     for user in users:
-        cur.execute("""
+
+        cur.execute(
+            """
             SELECT COUNT(*) AS c
             FROM sessions_log
-            WHERE user_id=%s AND login_at::date=CURRENT_DATE
-        """, (user["id"],))
+            WHERE user_id=%s
+              AND login_at::date=CURRENT_DATE
+            """,
+            (user["id"],),
+        )
+
         logins = cur.fetchone()["c"]
 
-        cur.execute(f"""
+        cur.execute(
+            f"""
             SELECT COUNT(*) AS c
             FROM {table}
-            WHERE user_id=%s AND created_at::date=CURRENT_DATE
-        """, (user["id"],))
+            WHERE user_id=%s
+              AND created_at::date=CURRENT_DATE
+            """,
+            (user["id"],),
+        )
+
         entries = cur.fetchone()["c"]
 
-        user_stats.append((user, logins, entries))
+        user_stats.append(
+            (
+                user,
+                logins,
+                entries,
+            )
+        )
 
-    # إجمالي القسم اليوم
-    cur.execute(f"""
+    cur.execute(
+        f"""
         SELECT COUNT(*) AS c
         FROM {table} t
-        JOIN users u ON u.id=t.user_id
-        WHERE u.module=%s AND t.created_at::date=CURRENT_DATE
-    """, (section["code"],))
+        JOIN users u
+            ON u.id=t.user_id
+        WHERE u.module=%s
+          AND t.created_at::date=CURRENT_DATE
+        """,
+        (section["code"],),
+    )
+
     total_entries = cur.fetchone()["c"]
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT COUNT(*) AS c
         FROM sessions_log sl
-        JOIN users u ON u.id=sl.user_id
-        WHERE u.module=%s AND sl.login_at::date=CURRENT_DATE
-    """, (section["code"],))
+        JOIN users u
+            ON u.id=sl.user_id
+        WHERE u.module=%s
+          AND sl.login_at::date=CURRENT_DATE
+        """,
+        (section["code"],),
+    )
+
     total_logins = cur.fetchone()["c"]
 
     cur.close()
     conn.close()
 
     text = (
-        f"📊 <b>تقرير القسم</b>\n\n"
-        f"📂 القسم: <b>{html.escape(section['name'])}</b>\n"
-        f"📅 التاريخ: <b>{datetime.now().strftime('%Y-%m-%d')}</b>\n"
-        f"🕒 إجمالي جلسات الدخول اليوم: <b>{total_logins}</b>\n"
-        f"📝 إجمالي البيانات المدخلة اليوم: <b>{total_entries}</b>\n\n"
-        f"👥 <b>المستخدمون:</b>\n"
+        "📊 تقرير القسم\n\n"
+        f"📂 القسم: "
+        f"{html.escape(section['name'])}\n"
+        f"📅 التاريخ: "
+        f"{datetime.now().strftime('%Y-%m-%d')}\n"
+        f"🕒 إجمالي جلسات الدخول اليوم: "
+        f"{total_logins}\n"
+        f"📝 إجمالي البيانات المدخلة اليوم: "
+        f"{total_entries}\n\n"
+        "👥 المستخدمون:\n"
     )
 
     if not user_stats:
-        text += "لا يوجد مستخدمون في هذا القسم.\n"
+
+        text += (
+            "لا يوجد مستخدمون في هذا القسم.\n"
+        )
+
     else:
+
         for user, logins, entries in user_stats:
-            status = "🟢" if user["enabled"] else "🔴"
-            text += (
-                f"{status} {html.escape(user['username'])} — "
-                f"دخول: {logins} | بيانات: {entries}\n"
+
+            status = (
+                "🟢"
+                if user["enabled"]
+                else "🔴"
             )
 
-    # تفاصيل الديوان للقسم، لأن البريد جزء أساسي من تقرير الديوان
+            text += (
+                f"{status} "
+                f"{html.escape(user['username'])} — "
+                f"دخول: {logins} | "
+                f"بيانات: {entries}\n"
+            )
+
     if section["code"] == "DEWAN":
+
         conn = db()
         cur = conn.cursor()
-        cur.execute("""
-            SELECT d.kind, d.recipient, d.book_number,
-                   d.required_count, d.completed_count,
-                   d.not_completed_count, d.reason,
-                   d.status, d.created_at, u.username
+
+        cur.execute(
+            """
+            SELECT
+                d.kind,
+                d.recipient,
+                d.book_number,
+                d.required_count,
+                d.completed_count,
+                d.not_completed_count,
+                d.reason,
+                d.status,
+                d.created_at,
+                u.username
             FROM dewan d
-            JOIN users u ON u.id=d.user_id
-            WHERE u.module=%s AND d.created_at::date=CURRENT_DATE
+            JOIN users u
+                ON u.id=d.user_id
+            WHERE u.module=%s
+              AND d.created_at::date=CURRENT_DATE
             ORDER BY d.created_at DESC
             LIMIT 50
-        """, (section["code"],))
+            """,
+            (section["code"],),
+        )
+
         rows = cur.fetchall()
+
         cur.close()
         conn.close()
 
-        text += "\n📬 <b>حركة الديوان اليوم:</b>\n"
+        text += (
+            "\n📬 <b>حركة الديوان اليوم:</b>\n"
+        )
+
         if not rows:
-            text += "لا توجد معاملات اليوم.\n"
+
+            text += (
+                "لا توجد معاملات اليوم.\n"
+            )
+
         else:
+
             for r in rows:
-                kind = "📥 وارد" if r["kind"] == "in" else "📤 صادر"
-                text += (
-                    f"{kind} | {html.escape(r['username'])} | "
-                    f"الجهة: {html.escape(r['recipient'] or '-') } | "
-                    f"رقم الكتاب: {html.escape(r['book_number'] or '-')} | "
-                    f"المطلوب: {r['required_count']}"
+
+                kind = (
+                    "📥 وارد"
+                    if r["kind"] == "in"
+                    else "📤 صادر"
                 )
+
+                text += (
+                    f"{kind} | "
+                    f"{html.escape(r['username'])} | "
+                    f"الجهة: "
+                    f"{html.escape(r['recipient'] or '-')} | "
+                    f"رقم الكتاب: "
+                    f"{html.escape(r['book_number'] or '-')} | "
+                    f"المطلوب: "
+                    f"{r['required_count']}"
+                )
+
                 if r["kind"] == "out":
+
                     text += (
-                        f" | المنجز: {r['completed_count']}"
-                        f" | غير المنجز: {r['not_completed_count']}"
+                        f" | المنجز: "
+                        f"{r['completed_count']}"
+                        f" | غير المنجز: "
+                        f"{r['not_completed_count']}"
                     )
-                    if r["reason"] and r["reason"] != "-":
-                        text += f" | السبب: {html.escape(r['reason'])}"
+
+                    if (
+                        r["reason"]
+                        and r["reason"] != "-"
+                    ):
+
+                        text += (
+                            f" | السبب: "
+                            f"{html.escape(r['reason'])}"
+                        )
+
                 if r["status"] == "TRANSFERRED":
-                    text += " | 🔄 محوّل إلى الصادر"
+
+                    text += (
+                        " | 🔄 محوّل إلى الصادر"
+                    )
+
                 text += "\n"
 
-    # Telegram يرفض الرسائل الطويلة جدًا، لذلك نقسم التقرير إلى أجزاء.
-    chunks = [text[i:i+3800] for i in range(0, len(text), 3800)]
-    for chunk in chunks:
-        await q.message.reply_text(chunk, parse_mode="HTML")
+    chunks = [
+        text[i:i + 3800]
+        for i in range(
+            0,
+            len(text),
+            3800,
+        )
+    ]
 
+    for chunk in chunks:
+
+        await q.message.reply_text(
+            chunk,
+            parse_mode="HTML",
+        )
+
+
+# ============================================================
+# تقرير حساب واحد
+# ============================================================
 
 @admin_only
 async def admin_report_one(update, context):
-    # إبقاء خيار التقرير الفردي من قائمة الحسابات، مع عرض تقرير حساب واحد.
+
     q = update.callback_query
     await q.answer()
 
-    uid = int(q.data.split(":")[2])
+    uid = int(
+        q.data.split(":")[2]
+    )
+
     u = get_user_by_id(uid)
+
     if not u:
-        await q.message.reply_text("❌ الحساب غير موجود.")
+
+        await q.message.reply_text(
+            "❌ الحساب غير موجود."
+        )
+
         return
 
     table_map = {
@@ -2212,30 +3884,54 @@ async def admin_report_one(update, context):
         "AMN_AFRAD": "amn_afrad",
         "AMN_ALAMLEN": "amn_alamlen",
     }
-    table = table_map.get(u["module"], "generic_entries")
+
+    table = table_map.get(
+        u["module"],
+        "generic_entries",
+    )
 
     conn = db()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT COUNT(*) AS c FROM sessions_log
-        WHERE user_id=%s AND login_at::date=CURRENT_DATE
-    """, (uid,))
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM sessions_log
+        WHERE user_id=%s
+          AND login_at::date=CURRENT_DATE
+        """,
+        (uid,),
+    )
+
     logins = cur.fetchone()["c"]
 
-    cur.execute(f"""
-        SELECT COUNT(*) AS c FROM {table}
-        WHERE user_id=%s AND created_at::date=CURRENT_DATE
-    """, (uid,))
+    cur.execute(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM {table}
+        WHERE user_id=%s
+          AND created_at::date=CURRENT_DATE
+        """,
+        (uid,),
+    )
+
     entries = cur.fetchone()["c"]
+
     cur.close()
     conn.close()
 
     await q.message.reply_text(
         f"📊 <b>التقرير اليومي للحساب</b>\n\n"
-        f"👤 المستخدم: <b>{html.escape(u['username'])}</b>\n"
-        f"📂 القسم: <b>{html.escape(u['section_name'] or u['module'])}</b>\n"
-        f"🕒 جلسات الدخول اليوم: <b>{logins}</b>\n"
-        f"📝 البيانات المدخلة اليوم: <b>{entries}</b>",
+        f"👤 المستخدم: "
+        f"{html.escape(u['username'])}\n"
+        f"📂 القسم: "
+        f"{html.escape(u['section_name'] or u['module'])}\n"
+        f"📅 التاريخ: "
+        f"{datetime.now().strftime('%Y-%m-%d')}\n"
+        f"🕒 جلسات الدخول اليوم: "
+        f"{logins}\n"
+        f"📝 البيانات المدخلة اليوم: "
+        f"{entries}",
         parse_mode="HTML",
     )
 
@@ -2246,6 +3942,7 @@ async def admin_report_one(update, context):
 
 @admin_only
 async def broadcast_start(update, context):
+
     q = update.callback_query
     await q.answer()
 
@@ -2261,6 +3958,7 @@ async def broadcast_start(update, context):
 
 @admin_only
 async def broadcast_send(update, context):
+
     text = update.message.text
 
     conn = db()
@@ -2268,7 +3966,9 @@ async def broadcast_send(update, context):
 
     cur.execute(
         """
-        SELECT username,telegram_id
+        SELECT
+            username,
+            telegram_id
         FROM users
         WHERE enabled=TRUE
           AND telegram_id IS NOT NULL
@@ -2284,7 +3984,9 @@ async def broadcast_send(update, context):
     failed = 0
 
     for user in users:
+
         try:
+
             await context.bot.send_message(
                 chat_id=user["telegram_id"],
                 text=text,
@@ -2293,6 +3995,7 @@ async def broadcast_send(update, context):
             sent += 1
 
         except Exception as exc:
+
             failed += 1
 
             log.warning(
@@ -2307,7 +4010,10 @@ async def broadcast_send(update, context):
         f"تعذر الإرسال: {failed}"
     )
 
-    await manager_menu(update, context)
+    await manager_menu(
+        update,
+        context,
+    )
 
     return ConversationHandler.END
 
@@ -2317,11 +4023,20 @@ async def broadcast_send(update, context):
 # ============================================================
 
 async def user_menu(update, context):
+
     user = get_user(
         update.effective_user.id
     )
 
-    if not user or not user["enabled"]:
+    if (
+        not user
+        or not user["enabled"]
+        or not user.get(
+            "section_enabled",
+            True,
+        )
+    ):
+
         await send_menu(
             update,
             "❌ الحساب غير موجود أو معطل.",
@@ -2334,6 +4049,7 @@ async def user_menu(update, context):
                 ]
             ],
         )
+
         return
 
     section_name = (
@@ -2455,12 +4171,18 @@ async def user_menu(update, context):
     )
 
 
-async def send_menu(update, text, kb):
+async def send_menu(
+    update,
+    text,
+    kb,
+):
+
     markup = InlineKeyboardMarkup(kb)
 
     if update.callback_query:
 
         try:
+
             await update.callback_query.edit_message_text(
                 text,
                 reply_markup=markup,
@@ -2492,36 +4214,56 @@ async def send_submission_to_admins(
     section_name,
     submission_kind="بيان",
 ):
+
     if not ADMIN_IDS:
-        log.warning("ADMIN_IDS is empty. Submission was not sent.")
+
+        log.warning(
+            "ADMIN_IDS is empty. Submission was not sent."
+        )
+
         return 0
 
-    safe_section = html.escape(str(section_name or "غير محدد"))
-    safe_title = html.escape(str(title))
-    safe_body = html.escape(str(body))
+    safe_section = html.escape(
+        str(section_name or "غير محدد")
+    )
+
+    safe_title = html.escape(
+        str(title)
+    )
+
+    safe_body = html.escape(
+        str(body)
+    )
 
     message = (
-        f"📨 <b>{html.escape(submission_kind)}</b>\n\n"
-        f"📂 <b>القسم: {safe_section}</b>\n"
+        f"📨 {html.escape(submission_kind)}\n\n"
+        f"📂 القسم: {safe_section}\n"
         f"📌 {safe_title}\n\n"
         f"{safe_body}"
     )
 
     sent = 0
+
     for admin_id in ADMIN_IDS:
+
         try:
+
             await context.bot.send_message(
                 chat_id=admin_id,
                 text=message,
                 parse_mode="HTML",
             )
+
             sent += 1
+
         except Exception as exc:
+
             log.warning(
                 "Could not send submission to admin %s: %s",
                 admin_id,
                 exc,
             )
+
     return sent
 
 
@@ -2533,11 +4275,30 @@ async def finish_question(
     table,
     row_id,
 ):
-    user = get_user(update.effective_user.id)
-    section_name = (user["section_name"] if user else None) or (user["module"] if user else "غير محدد")
-    submission_kind = "بريد" if table == "dewan" else "تقرير"
 
-    context.user_data["pending_submission"] = {
+    user = get_user(
+        update.effective_user.id
+    )
+
+    section_name = (
+        user["section_name"]
+        if user
+        else None
+    ) or (
+        user["module"]
+        if user
+        else "غير محدد"
+    )
+
+    submission_kind = (
+        "بريد"
+        if table == "dewan"
+        else "تقرير"
+    )
+
+    context.user_data[
+        "pending_submission"
+    ] = {
         "title": title,
         "body": body,
         "table": table,
@@ -2547,7 +4308,7 @@ async def finish_question(
     }
 
     await update.message.reply_text(
-        "📋 <b>مراجعة البيانات</b>\n\n"
+        "📋 مراجعة البيانات\n\n"
         f"{body}\n\n"
         "هل أنت متأكد من هذه المعلومات؟",
         parse_mode="HTML",
@@ -2569,6 +4330,7 @@ async def finish_question(
 
 
 async def finish_callback(update, context):
+
     q = update.callback_query
 
     try:
@@ -2581,14 +4343,12 @@ async def finish_callback(update, context):
     )
 
     if not pending:
+
         await q.message.reply_text(
             "⚠️ لا توجد عملية معلقة."
         )
-        return
 
-    # --------------------------------------------------------
-    # لا
-    # --------------------------------------------------------
+        return
 
     if q.data == "finish:no":
 
@@ -2598,10 +4358,11 @@ async def finish_callback(update, context):
         )
 
         try:
+
             await q.edit_message_text(
-                "↩️ تم إلغاء إرسال هذا البيان إلى الإدارة.\n\n"
-                "يمكنك العودة إلى القائمة وإدخال بيان جديد."
+                "↩️ تم إلغاء إرسال هذا البيان إلى الإدارة."
             )
+
         except Exception:
 
             await q.message.reply_text(
@@ -2614,10 +4375,6 @@ async def finish_callback(update, context):
         )
 
         return
-
-    # --------------------------------------------------------
-    # نعم
-    # --------------------------------------------------------
 
     if q.data == "finish:yes":
 
@@ -2639,11 +4396,13 @@ async def finish_callback(update, context):
         )
 
         try:
+
             await q.edit_message_text(
                 "📋 تم تأكيد البيانات.\n\n"
                 "هل تريد إرسالها إلى الإدارة؟",
                 reply_markup=keyboard,
             )
+
         except Exception:
 
             await q.message.reply_text(
@@ -2654,18 +4413,20 @@ async def finish_callback(update, context):
 
         return
 
-    # --------------------------------------------------------
-    # إرسال
-    # --------------------------------------------------------
-
     if q.data == "finish:send":
 
         sent = await send_submission_to_admins(
             context,
             pending["title"],
             pending["body"],
-            pending.get("section_name", "غير محدد"),
-            pending.get("submission_kind", "بيان"),
+            pending.get(
+                "section_name",
+                "غير محدد",
+            ),
+            pending.get(
+                "submission_kind",
+                "بيان",
+            ),
         )
 
         allowed_tables = {
@@ -2681,9 +4442,11 @@ async def finish_callback(update, context):
         table = pending["table"]
 
         if table not in allowed_tables:
+
             await q.message.reply_text(
                 "❌ حدث خطأ في اسم الجدول."
             )
+
             return
 
         conn = db()
@@ -2713,9 +4476,11 @@ async def finish_callback(update, context):
         if sent:
 
             try:
+
                 await q.edit_message_text(
                     "📨 تم إرسال البيان إلى الإدارة بنجاح."
                 )
+
             except Exception:
 
                 await q.message.reply_text(
@@ -2725,11 +4490,13 @@ async def finish_callback(update, context):
         else:
 
             try:
+
                 await q.edit_message_text(
                     "⚠️ تم حفظ البيان في قاعدة البيانات، "
                     "لكن تعذر إرساله إلى الإدارة.\n\n"
                     "تأكد من ADMIN_IDS."
                 )
+
             except Exception:
 
                 await q.message.reply_text(
@@ -2747,6 +4514,7 @@ async def finish_callback(update, context):
 # ============================================================
 
 async def dewan_start(update, context):
+
     q = update.callback_query
     await q.answer()
 
@@ -2754,11 +4522,16 @@ async def dewan_start(update, context):
         update.effective_user.id
     )
 
-    if not user or not user["enabled"]:
+    if (
+        not user
+        or not user["enabled"]
+    ):
+
         await q.message.reply_text(
             "🔐 يجب تسجيل الدخول أولًا.\n"
             "اضغط /start للبدء."
         )
+
         return ConversationHandler.END
 
     kind = q.data.split(":")[2]
@@ -2783,16 +4556,21 @@ async def dewan_start(update, context):
 
 
 async def dewan_recipient(update, context):
+
     recipient = update.message.text.strip()
 
     if not recipient:
+
         await update.message.reply_text(
             "❌ يجب إدخال الجهة.\n"
             "أرسل الجهة مرة أخرى:"
         )
+
         return DEWAN_RECIPIENT
 
-    context.user_data["dewan_recipient"] = recipient
+    context.user_data[
+        "dewan_recipient"
+    ] = recipient
 
     await update.message.reply_text(
         "📑 أرسل رقم الكتاب:"
@@ -2802,15 +4580,20 @@ async def dewan_recipient(update, context):
 
 
 async def dewan_book_number(update, context):
+
     book_number = update.message.text.strip()
 
     if not book_number:
+
         await update.message.reply_text(
             "❌ يجب إدخال رقم الكتاب:"
         )
+
         return DEWAN_BOOK_NO
 
-    context.user_data["dewan_book_number"] = book_number
+    context.user_data[
+        "dewan_book_number"
+    ] = book_number
 
     await update.message.reply_text(
         "🔢 أرسل العدد المطلوب:"
@@ -2820,7 +4603,9 @@ async def dewan_book_number(update, context):
 
 
 async def dewan_required(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
@@ -2833,9 +4618,12 @@ async def dewan_required(update, context):
         await update.message.reply_text(
             "❌ أرسل عددًا صحيحًا:"
         )
+
         return DEWAN_REQUIRED
 
-    context.user_data["dewan_required"] = value
+    context.user_data[
+        "dewan_required"
+    ] = value
 
     await update.message.reply_text(
         "🔢 العدد المطلوب: "
@@ -2847,7 +4635,9 @@ async def dewan_required(update, context):
 
 
 async def dewan_completed(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
@@ -2860,9 +4650,12 @@ async def dewan_completed(update, context):
         await update.message.reply_text(
             "❌ أرسل عددًا صحيحًا:"
         )
+
         return DEWAN_COMPLETED
 
-    context.user_data["dewan_completed"] = value
+    context.user_data[
+        "dewan_completed"
+    ] = value
 
     await update.message.reply_text(
         "🔴 أرسل العدد غير المنجز:"
@@ -2872,7 +4665,9 @@ async def dewan_completed(update, context):
 
 
 async def dewan_not_completed(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
@@ -2885,6 +4680,7 @@ async def dewan_not_completed(update, context):
         await update.message.reply_text(
             "❌ أرسل عددًا صحيحًا:"
         )
+
         return DEWAN_NOT_COMPLETED
 
     context.user_data[
@@ -2899,31 +4695,60 @@ async def dewan_not_completed(update, context):
 
         return DEWAN_REASON
 
-    context.user_data["dewan_reason"] = "-"
+    context.user_data[
+        "dewan_reason"
+    ] = "-"
 
-    if context.user_data.get("dewan_kind") == "in":
-        await save_dewan_incoming(update, context)
+    if context.user_data.get(
+        "dewan_kind"
+    ) == "in":
+
+        await save_dewan_incoming(
+            update,
+            context,
+        )
+
     else:
-        await save_dewan_outgoing(update, context)
+
+        await save_dewan_outgoing(
+            update,
+            context,
+        )
 
     return ConversationHandler.END
 
 
 async def dewan_reason(update, context):
+
     reason = update.message.text.strip()
 
     if not reason:
+
         await update.message.reply_text(
             "❌ أرسل سبب عدم الإنجاز:"
         )
+
         return DEWAN_REASON
 
-    context.user_data["dewan_reason"] = reason
+    context.user_data[
+        "dewan_reason"
+    ] = reason
 
-    if context.user_data.get("dewan_kind") == "in":
-        await save_dewan_incoming(update, context)
+    if context.user_data.get(
+        "dewan_kind"
+    ) == "in":
+
+        await save_dewan_incoming(
+            update,
+            context,
+        )
+
     else:
-        await save_dewan_outgoing(update, context)
+
+        await save_dewan_outgoing(
+            update,
+            context,
+        )
 
     return ConversationHandler.END
 
@@ -2932,7 +4757,11 @@ async def dewan_reason(update, context):
 # حفظ الوارد
 # ============================================================
 
-async def save_dewan_incoming(update, context):
+async def save_dewan_incoming(
+    update,
+    context,
+):
+
     u = get_user(
         update.effective_user.id
     )
@@ -2983,9 +4812,18 @@ async def save_dewan_incoming(update, context):
             recipient,
             book_number,
             required,
-            context.user_data.get("dewan_completed", 0),
-            context.user_data.get("dewan_not_completed", 0),
-            context.user_data.get("dewan_reason", "-"),
+            context.user_data.get(
+                "dewan_completed",
+                0,
+            ),
+            context.user_data.get(
+                "dewan_not_completed",
+                0,
+            ),
+            context.user_data.get(
+                "dewan_reason",
+                "-",
+            ),
         ),
     )
 
@@ -3004,9 +4842,12 @@ async def save_dewan_incoming(update, context):
         f"📤 الجهة المرسل منها: {recipient}\n"
         f"📑 رقم الكتاب: {book_number}\n"
         f"🔢 العدد المطلوب: {required}\n"
-        f"✅ العدد المنجز: {context.user_data.get('dewan_completed', 0)}\n"
-        f"🔴 العدد غير المنجز: {context.user_data.get('dewan_not_completed', 0)}\n"
-        f"📝 سبب عدم الإنجاز: {context.user_data.get('dewan_reason', '-') }"
+        f"✅ العدد المنجز: "
+        f"{context.user_data.get('dewan_completed', 0)}\n"
+        f"🔴 العدد غير المنجز: "
+        f"{context.user_data.get('dewan_not_completed', 0)}\n"
+        f"📝 سبب عدم الإنجاز: "
+        f"{context.user_data.get('dewan_reason', '-')}"
     )
 
     await finish_question(
@@ -3023,7 +4864,11 @@ async def save_dewan_incoming(update, context):
 # حفظ الصادر وربط الوارد
 # ============================================================
 
-async def save_dewan_outgoing(update, context):
+async def save_dewan_outgoing(
+    update,
+    context,
+):
+
     u = get_user(
         update.effective_user.id
     )
@@ -3055,10 +4900,6 @@ async def save_dewan_outgoing(update, context):
 
     conn = db()
     cur = conn.cursor()
-
-    # --------------------------------------------------------
-    # إنشاء الصادر
-    # --------------------------------------------------------
 
     cur.execute(
         """
@@ -3099,10 +4940,6 @@ async def save_dewan_outgoing(update, context):
 
     outgoing_id = cur.fetchone()["id"]
 
-    # --------------------------------------------------------
-    # البحث عن وارد فعال بنفس رقم الكتاب
-    # --------------------------------------------------------
-
     cur.execute(
         """
         SELECT id
@@ -3124,7 +4961,6 @@ async def save_dewan_outgoing(update, context):
 
         incoming_id = incoming["id"]
 
-        # إلغاء/تحويل الوارد
         cur.execute(
             """
             UPDATE dewan
@@ -3139,7 +4975,6 @@ async def save_dewan_outgoing(update, context):
             ),
         )
 
-        # ربط الصادر بالوارد
         cur.execute(
             """
             UPDATE dewan
@@ -3194,35 +5029,87 @@ async def save_dewan_outgoing(update, context):
 # ============================================================
 
 async def user_callback(update, context):
+
     q = update.callback_query
     await q.answer()
 
-    user = get_user(update.effective_user.id)
-    if not user or not user["enabled"] or not user.get("section_enabled", True):
-        await q.message.reply_text("🔐 الحساب غير مسجل أو معطل. اضغط /start للبدء.")
+    user = get_user(
+        update.effective_user.id
+    )
+
+    if (
+        not user
+        or not user["enabled"]
+        or not user.get(
+            "section_enabled",
+            True,
+        )
+    ):
+
+        await q.message.reply_text(
+            "🔐 الحساب غير مسجل أو معطل. "
+            "اضغط /start للبدء."
+        )
+
         return ConversationHandler.END
 
     data = q.data
+
     if data == "u:tenants":
-        await q.message.reply_text("👤 أرسل اسم المستأجر:")
+
+        await q.message.reply_text(
+            "👤 أرسل اسم المستأجر:"
+        )
+
         return TENANT_NAME
+
     if data == "u:migrants":
-        await q.message.reply_text("📍 أرسل اسم المحافظة:")
+
+        await q.message.reply_text(
+            "📍 أرسل اسم المحافظة:"
+        )
+
         return MIG_PROVINCE
+
     if data == "u:reports":
-        await q.message.reply_text("📊 أرسل العدد المطلوب:")
+
+        await q.message.reply_text(
+            "📊 أرسل العدد المطلوب:"
+        )
+
         return REP_REQUIRED
+
     if data == "u:afrad":
-        await q.message.reply_text("👮 أرسل عدد الجلسات:")
+
+        await q.message.reply_text(
+            "👮 أرسل عدد الجلسات:"
+        )
+
         return AFRAD_SESSIONS
+
     if data == "u:alamlen":
-        await q.message.reply_text("🚔 أرسل عدد الجولات:")
+
+        await q.message.reply_text(
+            "🚔 أرسل عدد الجولات:"
+        )
+
         return ALAMLEN_ROUNDS
+
     if data == "u:generic":
-        await q.message.reply_text("📝 أرسل البيان:")
+
+        await q.message.reply_text(
+            "📝 أرسل البيان:"
+        )
+
         return GENERIC_TEXT
+
     if data == "u:logout":
-        return await logout(update, context)
+
+        return await logout(
+            update,
+            context,
+        )
+
     return ConversationHandler.END
 
 
@@ -3231,9 +5118,10 @@ async def user_callback(update, context):
 # ============================================================
 
 async def tenant_name(update, context):
-    context.user_data["tenant_name"] = (
-        update.message.text
-    )
+
+    context.user_data[
+        "tenant_name"
+    ] = update.message.text
 
     await update.message.reply_text(
         "🌍 أرسل الجنسية:"
@@ -3243,6 +5131,7 @@ async def tenant_name(update, context):
 
 
 async def tenant_nationality(update, context):
+
     context.user_data[
         "tenant_nationality"
     ] = update.message.text
@@ -3255,6 +5144,7 @@ async def tenant_nationality(update, context):
 
 
 async def tenant_property(update, context):
+
     context.user_data[
         "tenant_property"
     ] = update.message.text
@@ -3267,6 +5157,7 @@ async def tenant_property(update, context):
 
 
 async def tenant_phone(update, context):
+
     context.user_data[
         "tenant_phone"
     ] = update.message.text
@@ -3279,6 +5170,7 @@ async def tenant_phone(update, context):
 
 
 async def tenant_notes(update, context):
+
     u = get_user(
         update.effective_user.id
     )
@@ -3349,6 +5241,7 @@ async def tenant_notes(update, context):
 # ============================================================
 
 async def mig_province(update, context):
+
     context.user_data[
         "mig_province"
     ] = update.message.text
@@ -3361,17 +5254,27 @@ async def mig_province(update, context):
 
 
 async def mig_arab(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
+
+        if value < 0:
+            raise ValueError
+
     except ValueError:
+
         await update.message.reply_text(
             "❌ أرسل رقمًا صحيحًا:"
         )
+
         return MIG_ARAB
 
-    context.user_data["mig_arab"] = value
+    context.user_data[
+        "mig_arab"
+    ] = value
 
     await update.message.reply_text(
         "🌍 أرسل عدد الأجانب:"
@@ -3381,14 +5284,22 @@ async def mig_arab(update, context):
 
 
 async def mig_foreign(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
+
+        if value < 0:
+            raise ValueError
+
     except ValueError:
+
         await update.message.reply_text(
             "❌ أرسل رقمًا صحيحًا:"
         )
+
         return MIG_FOREIGN
 
     context.user_data[
@@ -3403,6 +5314,7 @@ async def mig_foreign(update, context):
 
 
 async def mig_status(update, context):
+
     u = get_user(
         update.effective_user.id
     )
@@ -3469,18 +5381,28 @@ async def mig_status(update, context):
 # ============================================================
 
 async def rep_required(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
+
+        if value < 0:
+            raise ValueError
+
     except ValueError:
+
         await update.message.reply_text(
             "❌ العدد المطلوب يجب أن يكون رقمًا.\n"
             "أرسل العدد:"
         )
+
         return REP_REQUIRED
 
-    context.user_data["required"] = value
+    context.user_data[
+        "required"
+    ] = value
 
     await update.message.reply_text(
         "📌 العدد المطلوب:\n"
@@ -3492,17 +5414,27 @@ async def rep_required(update, context):
 
 
 async def rep_completed(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
+
+        if value < 0:
+            raise ValueError
+
     except ValueError:
+
         await update.message.reply_text(
             "❌ أرسل العدد المنجز كرقم:"
         )
+
         return REP_COMPLETED
 
-    context.user_data["completed"] = value
+    context.user_data[
+        "completed"
+    ] = value
 
     await update.message.reply_text(
         "✅ العدد المنجز:\n"
@@ -3514,17 +5446,27 @@ async def rep_completed(update, context):
 
 
 async def rep_impossible(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
+
+        if value < 0:
+            raise ValueError
+
     except ValueError:
+
         await update.message.reply_text(
             "❌ أرسل العدد المتعذر كرقم:"
         )
+
         return REP_IMPOSSIBLE
 
-    context.user_data["impossible"] = value
+    context.user_data[
+        "impossible"
+    ] = value
 
     await update.message.reply_text(
         "⚠️ العدد المتعذر:\n"
@@ -3536,13 +5478,23 @@ async def rep_impossible(update, context):
 
 
 async def rep_notes(update, context):
+
     u = get_user(
         update.effective_user.id
     )
 
-    required = context.user_data["required"]
-    completed = context.user_data["completed"]
-    impossible = context.user_data["impossible"]
+    required = context.user_data[
+        "required"
+    ]
+
+    completed = context.user_data[
+        "completed"
+    ]
+
+    impossible = context.user_data[
+        "impossible"
+    ]
+
     notes = update.message.text
 
     conn = db()
@@ -3603,14 +5555,22 @@ async def rep_notes(update, context):
 # ============================================================
 
 async def afrad_sessions(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
+
+        if value < 0:
+            raise ValueError
+
     except ValueError:
+
         await update.message.reply_text(
             "❌ أرسل رقمًا صحيحًا:"
         )
+
         return AFRAD_SESSIONS
 
     context.user_data[
@@ -3625,6 +5585,7 @@ async def afrad_sessions(update, context):
 
 
 async def afrad_notes(update, context):
+
     u = get_user(
         update.effective_user.id
     )
@@ -3682,17 +5643,27 @@ async def afrad_notes(update, context):
 # ============================================================
 
 async def alamlen_rounds(update, context):
+
     try:
+
         value = int(
             update.message.text.strip()
         )
+
+        if value < 0:
+            raise ValueError
+
     except ValueError:
+
         await update.message.reply_text(
             "❌ أرسل عدد الجولات كرقم:"
         )
+
         return ALAMLEN_ROUNDS
 
-    context.user_data["rounds"] = value
+    context.user_data[
+        "rounds"
+    ] = value
 
     await update.message.reply_text(
         "📍 أرسل مكان الجولة:"
@@ -3702,6 +5673,7 @@ async def alamlen_rounds(update, context):
 
 
 async def alamlen_location(update, context):
+
     context.user_data[
         "location"
     ] = update.message.text
@@ -3714,6 +5686,7 @@ async def alamlen_location(update, context):
 
 
 async def alamlen_notes(update, context):
+
     u = get_user(
         update.effective_user.id
     )
@@ -3771,10 +5744,11 @@ async def alamlen_notes(update, context):
 
 
 # ============================================================
-# قسم عام
+# القسم العام
 # ============================================================
 
 async def generic_text(update, context):
+
     u = get_user(
         update.effective_user.id
     )
@@ -3831,6 +5805,7 @@ async def generic_text(update, context):
 # ============================================================
 
 async def cancel(update, context):
+
     context.user_data.pop(
         "pending_submission",
         None,
@@ -3851,6 +5826,7 @@ async def cancel(update, context):
 class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
+
         self.send_response(200)
 
         self.send_header(
@@ -3864,11 +5840,16 @@ class HealthHandler(BaseHTTPRequestHandler):
             b"OK"
         )
 
-    def log_message(self, format, *args):
+    def log_message(
+        self,
+        format,
+        *args,
+    ):
         return
 
 
 def start_health_server():
+
     port = int(
         os.getenv(
             "PORT",
@@ -3877,7 +5858,10 @@ def start_health_server():
     )
 
     server = ThreadingHTTPServer(
-        ("0.0.0.0", port),
+        (
+            "0.0.0.0",
+            port,
+        ),
         HealthHandler,
     )
 
@@ -3892,12 +5876,14 @@ def start_health_server():
     )
 
 
-
 # ============================================================
-# التذكير اليومي الساعة 19:00 بتوقيت إسطنبول
+# التذكير اليومي
 # ============================================================
 
-ISTANBUL_TZ = ZoneInfo("Europe/Istanbul")
+ISTANBUL_TZ = ZoneInfo(
+    "Europe/Istanbul"
+)
+
 DAILY_REMINDER_TEXT = (
     "السلام عليكم ورحمة الله وبركاته\n"
     "حياكم الله يا إخوة\n"
@@ -3906,15 +5892,23 @@ DAILY_REMINDER_TEXT = (
 
 
 async def send_daily_reminder(application):
+
     conn = db()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT username, telegram_id
+
+    cur.execute(
+        """
+        SELECT
+            username,
+            telegram_id
         FROM users
         WHERE enabled=TRUE
           AND telegram_id IS NOT NULL
-    """)
+        """
+    )
+
     users = cur.fetchall()
+
     cur.close()
     conn.close()
 
@@ -3922,14 +5916,20 @@ async def send_daily_reminder(application):
     failed = 0
 
     for user in users:
+
         try:
+
             await application.bot.send_message(
                 chat_id=user["telegram_id"],
                 text=DAILY_REMINDER_TEXT,
             )
+
             sent += 1
+
         except Exception as exc:
+
             failed += 1
+
             log.warning(
                 "Daily reminder failed for %s: %s",
                 user["username"],
@@ -3944,9 +5944,13 @@ async def send_daily_reminder(application):
 
 
 async def daily_reminder_loop(application):
-    # لا نعتمد على ساعة Render/UTC؛ الموعد دائمًا 19:00 بتوقيت إسطنبول.
+
     while True:
-        now = datetime.now(ISTANBUL_TZ)
+
+        now = datetime.now(
+            ISTANBUL_TZ
+        )
+
         target = now.replace(
             hour=19,
             minute=0,
@@ -3955,50 +5959,76 @@ async def daily_reminder_loop(application):
         )
 
         if target <= now:
-            target += timedelta(days=1)
+
+            target += timedelta(
+                days=1
+            )
 
         wait_seconds = max(
             1,
-            (target - now).total_seconds(),
+            (
+                target - now
+            ).total_seconds(),
         )
 
         log.info(
             "Next daily reminder at %s",
-            target.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            target.strftime(
+                "%Y-%m-%d %H:%M:%S %Z"
+            ),
         )
 
         try:
-            await asyncio.sleep(wait_seconds)
-            await send_daily_reminder(application)
+
+            await asyncio.sleep(
+                wait_seconds
+            )
+
+            await send_daily_reminder(
+                application
+            )
+
         except asyncio.CancelledError:
-            log.info("Daily reminder task cancelled.")
+
+            log.info(
+                "Daily reminder task cancelled."
+            )
+
             raise
+
         except Exception:
-            log.exception("Daily reminder loop error.")
-            await asyncio.sleep(60)
+
+            log.exception(
+                "Daily reminder loop error."
+            )
+
+            await asyncio.sleep(
+                60
+            )
 
 
 async def start_background_tasks(application):
-    # يتم تشغيل مهمة التذكير مرة واحدة عند بدء البوت.
+
     application.create_task(
         daily_reminder_loop(application),
         name="daily-reminder",
     )
 
 
-
 # ============================================================
-# main
+# MAIN
 # ============================================================
 
 def main():
 
     if not BOT_TOKEN:
+
         raise RuntimeError(
             "BOT_TOKEN غير موجود في Render Environment Variables."
         )
 
     if not DATABASE_URL:
+
         raise RuntimeError(
             "DATABASE_URL غير موجود في Render Environment Variables."
         )
@@ -4011,6 +6041,7 @@ def main():
         Application.builder()
         .token(BOT_TOKEN)
         .post_init(start_background_tasks)
+        .post_init(setup_bot_commands)
         .build()
     )
 
@@ -4179,42 +6210,36 @@ def main():
             )
         ],
         states={
-
             DEWAN_RECIPIENT: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     dewan_recipient,
                 )
             ],
-
             DEWAN_BOOK_NO: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     dewan_book_number,
                 )
             ],
-
             DEWAN_REQUIRED: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     dewan_required,
                 )
             ],
-
             DEWAN_COMPLETED: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     dewan_completed,
                 )
             ],
-
             DEWAN_NOT_COMPLETED: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     dewan_not_completed,
                 )
             ],
-
             DEWAN_REASON: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
@@ -4222,14 +6247,12 @@ def main():
                 )
             ],
         },
-
         fallbacks=[
             CommandHandler(
                 "cancel",
                 cancel,
             )
         ],
-
         allow_reentry=True,
     )
 
@@ -4447,7 +6470,7 @@ def main():
     )
 
     # ========================================================
-    # قسم عام جديد
+    # القسم العام
     # ========================================================
 
     generic_conv = ConversationHandler(
@@ -4501,7 +6524,7 @@ def main():
     )
 
     # ========================================================
-    # ترتيب الـ handlers مهم
+    # ترتيب الـ handlers
     # ========================================================
 
     app.add_handler(
@@ -4511,7 +6534,9 @@ def main():
         )
     )
 
-    app.add_handler(login_conv)
+    app.add_handler(
+        login_conv
+    )
 
     app.add_handler(
         CommandHandler(
@@ -4520,23 +6545,53 @@ def main():
         )
     )
 
-    app.add_handler(create_conv)
-    app.add_handler(add_section_conv)
-    app.add_handler(edit_account_conv)
+    app.add_handler(
+        create_conv
+    )
 
-    app.add_handler(broadcast_conv)
+    app.add_handler(
+        add_section_conv
+    )
 
-    app.add_handler(dewan_conv)
-    app.add_handler(tenant_conv)
-    app.add_handler(mig_conv)
-    app.add_handler(rep_conv)
-    app.add_handler(afrad_conv)
-    app.add_handler(alamlen_conv)
-    app.add_handler(generic_conv)
+    app.add_handler(
+        edit_account_conv
+    )
+
+    app.add_handler(
+        broadcast_conv
+    )
+
+    app.add_handler(
+        dewan_conv
+    )
+
+    app.add_handler(
+        tenant_conv
+    )
+
+    app.add_handler(
+        mig_conv
+    )
+
+    app.add_handler(
+        rep_conv
+    )
+
+    app.add_handler(
+        afrad_conv
+    )
+
+    app.add_handler(
+        alamlen_conv
+    )
+
+    app.add_handler(
+        generic_conv
+    )
 
     # ========================================================
     # تأكيد إرسال البيانات
-    # مهم: يجب أن يكون قبل user_callback العام
+    # يجب أن يكون قبل user_callback العام
     # ========================================================
 
     app.add_handler(
@@ -4564,6 +6619,7 @@ def main():
         )
     )
 
+    # صفحة الحساب
     app.add_handler(
         CallbackQueryHandler(
             admin_user_action,
@@ -4571,6 +6627,7 @@ def main():
         )
     )
 
+    # حذف الحساب - شاشة التأكيد
     app.add_handler(
         CallbackQueryHandler(
             admin_delete_user_start,
@@ -4578,10 +6635,19 @@ def main():
         )
     )
 
+    # حذف الحساب - التأكيد النهائي
     app.add_handler(
         CallbackQueryHandler(
             admin_delete_user_confirm,
             pattern=r"^m:delete_user_confirm:\d+$",
+        )
+    )
+
+    # تفعيل / تعطيل الحساب
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_toggle_one,
+            pattern=r"^m:toggleone:\d+$",
         )
     )
 
@@ -4596,13 +6662,6 @@ def main():
         CallbackQueryHandler(
             admin_clear_data_confirm,
             pattern=r"^m:clear_data_confirm$",
-        )
-    )
-
-    app.add_handler(
-        CallbackQueryHandler(
-            admin_toggle_one,
-            pattern=r"^m:toggleone:\d+$",
         )
     )
 
@@ -4641,32 +6700,122 @@ def main():
         )
     )
 
+    # ========================================================
     # إدارة الأقسام والأسئلة
+    # ========================================================
+
     section_question_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(section_question_add_start, pattern=r"^sq:add:\d+:[^:]+$"),
-            CallbackQueryHandler(section_question_edit_start, pattern=r"^sq:edit:\d+:[^:]+$"),
-            CallbackQueryHandler(section_question_edit_select, pattern=r"^sqedit:\d+:\d+:[^:]+$"),
+            CallbackQueryHandler(
+                section_question_add_start,
+                pattern=r"^sq:add:\d+:[^:]+$",
+            ),
+            CallbackQueryHandler(
+                section_question_edit_start,
+                pattern=r"^sq:edit:\d+:[^:]+$",
+            ),
+            CallbackQueryHandler(
+                section_question_edit_select,
+                pattern=r"^sqedit:\d+:\d+:[^:]+$",
+            ),
         ],
         states={
-            SECTION_Q_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, section_question_add_save)],
-            SECTION_Q_EDIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, section_question_edit_save)],
+            SECTION_Q_ADD: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    section_question_add_save,
+                )
+            ],
+            SECTION_Q_EDIT: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    section_question_edit_save,
+                )
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler(
+                "cancel",
+                cancel,
+            )
+        ],
         allow_reentry=True,
     )
-    app.add_handler(section_question_conv)
-    app.add_handler(CallbackQueryHandler(admin_section_action, pattern=r"^section_action:\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_section_form, pattern=r"^section:form:\d+:[^:]+$"))
-    app.add_handler(CallbackQueryHandler(admin_section_settings, pattern=r"^section:settings:\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_section_toggle, pattern=r"^section:toggle:\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_section_users, pattern=r"^section:users:\d+$"))
-    app.add_handler(CallbackQueryHandler(section_question_delete_start, pattern=r"^sq:delete:\d+:[^:]+$"))
-    app.add_handler(CallbackQueryHandler(section_question_delete, pattern=r"^sqdel:\d+:\d+:[^:]+$"))
-    app.add_handler(CallbackQueryHandler(section_question_order, pattern=r"^sq:order:\d+:[^:]+$"))
-    app.add_handler(CallbackQueryHandler(section_question_move, pattern=r"^sqmove:(up|down):\d+:\d+:[^:]+$"))
-    app.add_handler(CallbackQueryHandler(section_question_edit_select, pattern=r"^sqedit:\d+:\d+:[^:]+$"))
-    app.add_handler(CallbackQueryHandler(lambda update, context: update.callback_query.answer(), pattern=r"^noop$"))
+
+    app.add_handler(
+        section_question_conv
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_section_action,
+            pattern=r"^section_action:\d+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_section_form,
+            pattern=r"^section:form:\d+:[^:]+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_section_settings,
+            pattern=r"^section:settings:\d+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_section_toggle,
+            pattern=r"^section:toggle:\d+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_section_users,
+            pattern=r"^section:users:\d+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            section_question_delete_start,
+            pattern=r"^sq:delete:\d+:[^:]+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            section_question_delete,
+            pattern=r"^sqdel:\d+:\d+:[^:]+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            section_question_order,
+            pattern=r"^sq:order:\d+:[^:]+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            section_question_move,
+            pattern=r"^sqmove:(up|down):\d+:\d+:[^:]+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            lambda update, context:
+                update.callback_query.answer(),
+            pattern=r"^noop$",
+        )
+    )
 
     app.add_handler(
         CallbackQueryHandler(
@@ -4702,6 +6851,10 @@ def main():
         drop_pending_updates=False,
     )
 
+
+# ============================================================
+# تشغيل البرنامج
+# ============================================================
 
 if __name__ == "__main__":
     main()
