@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+import json
 from functools import wraps
 
 import psycopg2
@@ -43,6 +44,12 @@ log = logging.getLogger("department_bot")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/telegram/webhook").strip()
+if not WEBHOOK_PATH.startswith("/"):
+    WEBHOOK_PATH = "/" + WEBHOOK_PATH
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 
 ADMIN_IDS = {
     int(x.strip())
@@ -5820,61 +5827,91 @@ async def cancel(update, context):
 
 
 # ============================================================
-# Health server لـ Render
+# HTTP server لـ Render + Telegram Webhook
 # ============================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
+    application = None
+    event_loop = None
+
+    def _send(self, status, body):
+        data = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_GET(self):
+        if self.path == "/" or self.path == "/health":
+            self._send(200, "OK")
+            return
+        self._send(404, "Not Found")
 
-        self.send_response(200)
+    def do_POST(self):
+        if self.path != WEBHOOK_PATH:
+            self._send(404, "Not Found")
+            return
 
-        self.send_header(
-            "Content-Type",
-            "text/plain; charset=utf-8",
-        )
+        if WEBHOOK_SECRET:
+            received = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+            if received != WEBHOOK_SECRET:
+                self._send(403, "Forbidden")
+                return
 
-        self.end_headers()
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length)
+            data = json.loads(raw.decode("utf-8"))
+            update = Update.de_json(data, self.application.bot)
 
-        self.wfile.write(
-            b"OK"
-        )
+            future = asyncio.run_coroutine_threadsafe(
+                self.application.process_update(update),
+                self.event_loop,
+            )
+            future.result(timeout=25)
+            self._send(200, "OK")
+        except Exception:
+            log.exception("Telegram webhook request failed")
+            self._send(500, "Internal Server Error")
 
-    def log_message(
-        self,
-        format,
-        *args,
-    ):
+    def log_message(self, format, *args):
         return
 
 
-def start_health_server():
+def start_health_server(application, event_loop):
+    port = int(os.getenv("PORT", "10000"))
+    HealthHandler.application = application
+    HealthHandler.event_loop = event_loop
 
-    port = int(
-        os.getenv(
-            "PORT",
-            "10000",
-        )
-    )
-
-    server = ThreadingHTTPServer(
-        (
-            "0.0.0.0",
-            port,
-        ),
-        HealthHandler,
-    )
+    server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
 
     Thread(
         target=server.serve_forever,
         daemon=True,
     ).start()
 
-    log.info(
-        "Health server listening on port %s",
-        port,
+    log.info("HTTP server listening on port %s", port)
+    return server
+
+
+async def configure_webhook(application):
+    if not RENDER_EXTERNAL_URL:
+        raise RuntimeError(
+            "RENDER_EXTERNAL_URL غير موجود. ضع رابط خدمة Render، مثال: "
+            "https://your-service.onrender.com"
+        )
+
+    webhook_url = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
+
+    await application.bot.set_webhook(
+        url=webhook_url,
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=False,
+        secret_token=WEBHOOK_SECRET or None,
     )
 
+    log.info("Telegram webhook configured: %s", webhook_url)
 
 # ============================================================
 # التذكير اليومي
@@ -6019,7 +6056,7 @@ async def start_background_tasks(application):
 # MAIN
 # ============================================================
 
-def main():
+async def main():
 
     if not BOT_TOKEN:
 
@@ -6842,14 +6879,31 @@ def main():
         )
     )
 
-    log.info(
-        "Starting Telegram bot..."
-    )
+    log.info("Starting Telegram bot in webhook mode...")
 
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=False,
-    )
+    loop = asyncio.get_running_loop()
+    server = None
+
+    await app.initialize()
+    await start_background_tasks(app)
+    await setup_bot_commands(app)
+    await app.start()
+
+    server = start_health_server(app, loop)
+    await configure_webhook(app)
+
+    try:
+        await asyncio.Event().wait()
+    finally:
+        try:
+            await app.bot.delete_webhook(drop_pending_updates=False)
+        except Exception:
+            log.exception("Failed to delete Telegram webhook")
+        if server:
+            server.shutdown()
+            server.server_close()
+        await app.stop()
+        await app.shutdown()
 
 
 # ============================================================
@@ -6857,4 +6911,4 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
