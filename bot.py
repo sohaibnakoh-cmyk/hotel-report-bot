@@ -116,7 +116,7 @@ DEFAULT_SECTIONS = [
 
     # تعميم
     BROADCAST_TEXT,
-) = range(36)
+) = range(37)
 
 
 # ============================================================
@@ -580,33 +580,6 @@ async def public_callback(update, context):
             "🔐 أرسل اسم المستخدم:"
         )
         return LOGIN_USERNAME
-
-
-
-# ============================================================
-# معالج أزرار المستخدم العامة
-# ============================================================
-async def user_callback(update, context):
-    q = update.callback_query
-    await q.answer()
-
-    user = get_user(update.effective_user.id)
-    if not user or not user["enabled"]:
-        await q.message.reply_text(
-            "❌ الحساب غير موجود أو معطل.\nاضغط /start للبدء."
-        )
-        return ConversationHandler.END
-
-    context.user_data["user_id"] = user["id"]
-
-    if q.data == "u:logout":
-        await logout(update, context)
-        return ConversationHandler.END
-
-    # أزرار u:* الخاصة بإدخال البيانات يتم التعامل معها أولًا بواسطة
-    # ConversationHandler المناسب. إذا وصل الزر إلى هنا فهو غير معروف.
-    await user_menu(update, context)
-    return ConversationHandler.END
 
 
 # ============================================================
