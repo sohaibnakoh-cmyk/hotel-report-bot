@@ -667,6 +667,11 @@ def welcome_keyboard():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # A Telegram webhook request wakes a sleeping Render Web Service.
+    log.info(
+        "Telegram /start received; Render service is awake. telegram_id=%s",
+        update.effective_user.id if update.effective_user else None,
+    )
 
     if is_admin(update):
         await update.message.reply_text(
@@ -4281,6 +4286,7 @@ async def finish_question(
     body,
     table,
     row_id,
+    notify_admin_immediately=False,
 ):
 
     user = get_user(
@@ -4313,6 +4319,60 @@ async def finish_question(
         "section_name": section_name,
         "submission_kind": submission_kind,
     }
+
+    if notify_admin_immediately:
+        sent = await send_submission_to_admins(
+            context,
+            title,
+            body,
+            section_name,
+            submission_kind,
+        )
+
+        if sent:
+            allowed_tables = {
+                "dewan",
+                "tenants",
+                "migrants",
+                "reports",
+                "amn_afrad",
+                "amn_alamlen",
+                "generic_entries",
+            }
+            if table in allowed_tables:
+                conn = db()
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    UPDATE {table}
+                    SET sent_to_admin=TRUE,
+                        sent_at=CURRENT_TIMESTAMP
+                    WHERE id=%s
+                    """,
+                    (row_id,),
+                )
+                conn.commit()
+                cur.close()
+                conn.close()
+
+            context.user_data.pop(
+                "pending_submission",
+                None,
+            )
+
+            await update.message.reply_text(
+                "📨 تم تسجيل البريد الوارد وإشعار المدير به بنجاح.\n\n"
+                f"{body}",
+                parse_mode="HTML",
+            )
+            return
+
+        await update.message.reply_text(
+            "⚠️ تم حفظ البريد الوارد، لكن تعذر إشعار المدير.\n\n"
+            "تأكد من ADMIN_IDS ثم أعد الإرسال من لوحة البيانات.\n\n"
+            f"{body}",
+            parse_mode="HTML",
+        )
 
     await update.message.reply_text(
         "📋 مراجعة البيانات\n\n"
@@ -4864,6 +4924,7 @@ async def save_dewan_incoming(
         body,
         "dewan",
         row_id,
+        notify_admin_immediately=True,
     )
 
 
@@ -5843,8 +5904,10 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path == "/" or self.path == "/health":
-            self._send(200, "OK")
+        # Render wakes the Web Service when it receives an HTTP request.
+        # Telegram's webhook then delivers the pending /start update.
+        if self.path in ("/", "/health", "/wake"):
+            self._send(200, "AWAKE")
             return
         self._send(404, "Not Found")
 
@@ -6070,15 +6133,11 @@ async def main():
             "DATABASE_URL غير موجود في Render Environment Variables."
         )
 
-    start_health_server()
-
     init_db()
 
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .post_init(start_background_tasks)
-        .post_init(setup_bot_commands)
         .build()
     )
 
