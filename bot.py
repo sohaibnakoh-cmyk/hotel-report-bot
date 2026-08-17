@@ -2,10 +2,11 @@ import os
 import logging
 from datetime import datetime
 from functools import wraps
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler,
@@ -13,7 +14,6 @@ from telegram.ext import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
-load_dotenv()
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
@@ -40,15 +40,7 @@ ALAMLEN_ROUNDS, ALAMLEN_LOCATION, ALAMLEN_NOTES = range(23, 26)
 BROADCAST_TEXT = 26
 
 def db():
-    # Render and other managed PostgreSQL providers supply DATABASE_URL.
-    # Keep SSL settings from the provider URL when present.
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL is not configured.")
-    return psycopg2.connect(
-        DATABASE_URL,
-        cursor_factory=RealDictCursor,
-        connect_timeout=15,
-    )
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def init_db():
     conn=db(); cur=conn.cursor()
@@ -563,9 +555,33 @@ async def cancel(update,context):
     else: await user_menu(update,context)
     return ConversationHandler.END
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_health_server():
+    # Render Web Services require a listening port. Telegram polling itself
+    # does not open a port, so expose a tiny health endpoint for Render.
+    port = int(os.getenv("PORT", "10000"))
+    server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
+    Thread(target=server.serve_forever, daemon=True).start()
+    log.info("Health server listening on port %s", port)
+
+
 def main():
-    if not BOT_TOKEN or not DATABASE_URL:
-        raise RuntimeError("ضع BOT_TOKEN و DATABASE_URL في ملف .env")
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN is not configured in Render Environment Variables.")
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not configured in Render Environment Variables.")
+
+    start_health_server()
     init_db()
     app=Application.builder().token(BOT_TOKEN).build()
 
