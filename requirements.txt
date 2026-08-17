@@ -1,7 +1,4 @@
-python-telegram-bot
-flask
-psycopg2-binary
-arabic-reshaper
-python-bidi
-reportlab
-Pillow
+python-telegram-bot>=22,<23
+psycopg2-binary>=2.9,<3
+python-dotenv>=1,<2
+Werkzeug>=3.1,<4
