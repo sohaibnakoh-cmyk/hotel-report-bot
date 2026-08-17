@@ -2108,7 +2108,10 @@ async def finish_question(
     row_id,
 ):
     user = get_user(update.effective_user.id)
-    section_name = (user["section_name"] if user else None) or (user["module"] if user else "غير محدد")
+    section_name = (
+        (user["section_name"] if user else None)
+        or (user["module"] if user else "غير محدد")
+    )
     submission_kind = "بريد" if table == "dewan" else "تقرير"
 
     context.user_data["pending_submission"] = {
@@ -2120,22 +2123,20 @@ async def finish_question(
         "submission_kind": submission_kind,
     }
 
+    review_text = (
+        "📋 <b>مراجعة البيانات</b>\n\n"
+        f"{html.escape(str(body))}\n\n"
+        "هل أنت متأكد من هذه المعلومات؟"
+    )
+
     await update.message.reply_text(
-        "✅ تم حفظ البيانات.\n\n"
-        "هل انتهيت من إدخال هذا البيان؟",
+        review_text,
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "✅ نعم",
-                        callback_data="finish:yes",
-                    ),
-                    InlineKeyboardButton(
-                        "❌ لا",
-                        callback_data="finish:no",
-                    ),
-                ]
-            ]
+            [[
+                InlineKeyboardButton("✅ نعم", callback_data="finish:yes"),
+                InlineKeyboardButton("❌ لا", callback_data="finish:no"),
+            ]]
         ),
     )
 
@@ -2212,15 +2213,15 @@ async def finish_callback(update, context):
 
         try:
             await q.edit_message_text(
-                "📋 تم تأكيد البيانات.\n\n"
-                "هل تريد إرسالها إلى الإدارة؟",
+                "📋 تم تأكيد البيانات بنجاح.\n\n"
+                "اضغط الزر التالي لإرسال البيانات إلى الإدارة:",
                 reply_markup=keyboard,
             )
         except Exception:
 
             await q.message.reply_text(
-                "📋 تم تأكيد البيانات.\n\n"
-                "هل تريد إرسالها إلى الإدارة؟",
+                "📋 تم تأكيد البيانات بنجاح.\n\n"
+                "اضغط الزر التالي لإرسال البيانات إلى الإدارة:",
                 reply_markup=keyboard,
             )
 
