@@ -5967,6 +5967,8 @@ async def configure_webhook(application):
 
     webhook_url = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
 
+    log.info("Setting Telegram webhook to: %s", webhook_url)
+
     await application.bot.set_webhook(
         url=webhook_url,
         allowed_updates=Update.ALL_TYPES,
@@ -6954,10 +6956,9 @@ async def main():
     try:
         await asyncio.Event().wait()
     finally:
-        try:
-            await app.bot.delete_webhook(drop_pending_updates=False)
-        except Exception:
-            log.exception("Failed to delete Telegram webhook")
+        # لا نحذف Telegram Webhook عند إيقاف/إسبات Render.
+        # بقاء الـ Webhook ضروري لكي يصل /start إلى Render ويوقظ الخدمة
+        # عند أول طلب بعد النوم.
         if server:
             server.shutdown()
             server.server_close()
