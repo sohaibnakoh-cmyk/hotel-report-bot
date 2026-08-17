@@ -3093,7 +3093,7 @@ async def admin_delete_user_confirm(update, context):
     try:
 
         uid = int(
-            q.data.split(":")[3]
+            q.data.split(":")[2]
         )
 
     except (
