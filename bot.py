@@ -118,8 +118,6 @@ DEFAULT_SECTIONS = [
     BROADCAST_TEXT,
 ) = range(36)
 
-QUESTION_SECTION, QUESTION_FORM, QUESTION_TEXT = range(36, 39)
-
 
 # ============================================================
 # قاعدة البيانات
@@ -261,36 +259,6 @@ def init_db():
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
     """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS question_definitions (
-            id SERIAL PRIMARY KEY,
-            section_code VARCHAR(50) NOT NULL,
-            form_code VARCHAR(50) NOT NULL,
-            field_key VARCHAR(100) NOT NULL,
-            question_text TEXT NOT NULL,
-            position INTEGER NOT NULL DEFAULT 1,
-            enabled BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(section_code, form_code, field_key)
-        )
-    """)
-    default_questions = {
-        ("DEWAN", "out"): [("recipient","الجهة المرسل إليها"),("book_number","رقم الكتاب"),("required_count","العدد المطلوب"),("completed_count","العدد المنجز"),("not_completed_count","العدد غير المنجز"),("reason","سبب عدم الإنجاز")],
-        ("DEWAN", "in"): [("recipient","الجهة المرسل منها"),("book_number","رقم الكتاب"),("required_count","العدد المطلوب")],
-        ("AKARAT", "main"): [("name","اسم المستأجر"),("nationality","الجنسية"),("property","العقار"),("phone","رقم الهاتف"),("notes","ملاحظات")],
-        ("MIGRANTS", "main"): [("province","المحافظة"),("arab_count","عدد العرب"),("foreign_count","عدد الأجانب"),("status_text","الحالة")],
-        ("TQARER", "main"): [("required_count","العدد المطلوب"),("completed_count","العدد المنجز"),("impossible_count","العدد المتعذر"),("notes","ملاحظات")],
-        ("AMN_AFRAD", "main"): [("sessions_count","عدد الجلسات"),("notes","ملاحظات")],
-        ("AMN_ALAMLEN", "main"): [("rounds_count","عدد الجولات"),("location","الموقع"),("notes","ملاحظات")],
-    }
-    for (sc, fc), qs in default_questions.items():
-        for pos, (fk, qt) in enumerate(qs, 1):
-            cur.execute("""
-                INSERT INTO question_definitions(section_code,form_code,field_key,question_text,position)
-                VALUES(%s,%s,%s,%s,%s)
-                ON CONFLICT(section_code,form_code,field_key) DO NOTHING
-            """, (sc,fc,fk,qt,pos))
 
     # --------------------------------------------------------
     # تحديث جدول الديوان القديم
@@ -1153,11 +1121,40 @@ async def add_section_code(update, context):
 
 @admin_only
 async def admin_sections(update, context):
-    q=update.callback_query; await q.answer(); sections=get_sections(enabled_only=False); kb=[]
-    for sec in sections:
-        kb.append([InlineKeyboardButton(f"{'🟢' if sec['enabled'] else '🔴'} {sec['name']} — {sec['code']}",callback_data=f"section_action:{sec['id']}")])
-    kb.append([InlineKeyboardButton("➕ إضافة قسم",callback_data="m:add_section")])
-    await q.message.reply_text("📂 إدارة الأقسام:\n\nاضغط على القسم لعرض المستخدمين والنماذج والأسئلة وإدارتها.",reply_markup=InlineKeyboardMarkup(kb))
+    q = update.callback_query
+    await q.answer()
+
+    sections = get_sections(enabled_only=False)
+
+    kb = []
+
+    for s in sections:
+        status = "🟢" if s["enabled"] else "🔴"
+
+        kb.append(
+            [
+                InlineKeyboardButton(
+                    f"{status} {s['name']} — {s['code']}",
+                    callback_data=(
+                        f"section_action:{s['id']}"
+                    ),
+                )
+            ]
+        )
+
+    kb.append(
+        [
+            InlineKeyboardButton(
+                "➕ إضافة قسم",
+                callback_data="m:add_section",
+            )
+        ]
+    )
+
+    await q.message.reply_text(
+        "📂 إدارة الأقسام:",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
 
 # ============================================================
@@ -2097,8 +2094,10 @@ async def finish_question(
     }
 
     await update.message.reply_text(
-        "✅ تم حفظ البيانات.\n\n"
-        "هل انتهيت من إدخال هذا البيان؟",
+        "📋 <b>مراجعة البيانات</b>\n\n"
+        f"{body}\n\n"
+        "هل أنت متأكد من هذه المعلومات؟",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
@@ -2385,17 +2384,6 @@ async def dewan_required(update, context):
 
     context.user_data["dewan_required"] = value
 
-    kind = context.user_data["dewan_kind"]
-
-    if kind == "in":
-
-        await save_dewan_incoming(
-            update,
-            context,
-        )
-
-        return ConversationHandler.END
-
     await update.message.reply_text(
         "🔢 العدد المطلوب: "
         f"{value}\n\n"
@@ -2460,10 +2448,10 @@ async def dewan_not_completed(update, context):
 
     context.user_data["dewan_reason"] = "-"
 
-    await save_dewan_outgoing(
-        update,
-        context,
-    )
+    if context.user_data.get("dewan_kind") == "in":
+        await save_dewan_incoming(update, context)
+    else:
+        await save_dewan_outgoing(update, context)
 
     return ConversationHandler.END
 
@@ -2479,10 +2467,10 @@ async def dewan_reason(update, context):
 
     context.user_data["dewan_reason"] = reason
 
-    await save_dewan_outgoing(
-        update,
-        context,
-    )
+    if context.user_data.get("dewan_kind") == "in":
+        await save_dewan_incoming(update, context)
+    else:
+        await save_dewan_outgoing(update, context)
 
     return ConversationHandler.END
 
@@ -2530,9 +2518,9 @@ async def save_dewan_incoming(update, context):
             %s,
             %s,
             %s,
-            0,
-            0,
-            NULL,
+            %s,
+            %s,
+            %s,
             'ACTIVE'
         )
         RETURNING id
@@ -2542,6 +2530,9 @@ async def save_dewan_incoming(update, context):
             recipient,
             book_number,
             required,
+            context.user_data.get("dewan_completed", 0),
+            context.user_data.get("dewan_not_completed", 0),
+            context.user_data.get("dewan_reason", "-"),
         ),
     )
 
@@ -2559,7 +2550,10 @@ async def save_dewan_incoming(update, context):
         f"📥 النوع: وارد\n"
         f"📤 الجهة المرسل منها: {recipient}\n"
         f"📑 رقم الكتاب: {book_number}\n"
-        f"🔢 العدد المطلوب: {required}"
+        f"🔢 العدد المطلوب: {required}\n"
+        f"✅ العدد المنجز: {context.user_data.get('dewan_completed', 0)}\n"
+        f"🔴 العدد غير المنجز: {context.user_data.get('dewan_not_completed', 0)}\n"
+        f"📝 سبب عدم الإنجاز: {context.user_data.get('dewan_reason', '-') }"
     )
 
     await finish_question(
@@ -2740,6 +2734,43 @@ async def save_dewan_outgoing(update, context):
         "dewan",
         outgoing_id,
     )
+
+
+# ============================================================
+# توجيه أزرار المستخدم
+# ============================================================
+
+async def user_callback(update, context):
+    q = update.callback_query
+    await q.answer()
+
+    user = get_user(update.effective_user.id)
+    if not user or not user["enabled"] or not user.get("section_enabled", True):
+        await q.message.reply_text("🔐 الحساب غير مسجل أو معطل. اضغط /start للبدء.")
+        return ConversationHandler.END
+
+    data = q.data
+    if data == "u:tenants":
+        await q.message.reply_text("👤 أرسل اسم المستأجر:")
+        return TENANT_NAME
+    if data == "u:migrants":
+        await q.message.reply_text("📍 أرسل اسم المحافظة:")
+        return MIG_PROVINCE
+    if data == "u:reports":
+        await q.message.reply_text("📊 أرسل العدد المطلوب:")
+        return REP_REQUIRED
+    if data == "u:afrad":
+        await q.message.reply_text("👮 أرسل عدد الجلسات:")
+        return AFRAD_SESSIONS
+    if data == "u:alamlen":
+        await q.message.reply_text("🚔 أرسل عدد الجولات:")
+        return ALAMLEN_ROUNDS
+    if data == "u:generic":
+        await q.message.reply_text("📝 أرسل البيان:")
+        return GENERIC_TEXT
+    if data == "u:logout":
+        return await logout(update, context)
+    return ConversationHandler.END
 
 
 # ============================================================
@@ -3495,6 +3526,7 @@ async def daily_reminder_loop(application):
 
 
 async def start_background_tasks(application):
+    # يتم تشغيل مهمة التذكير مرة واحدة عند بدء البوت.
     application.create_task(
         daily_reminder_loop(application),
         name="daily-reminder",
@@ -3988,17 +4020,6 @@ def main():
         ],
     )
 
-    question_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(admin_question_add_start, pattern=r"^q:add:\d+:[A-Za-z0-9_]+$"),
-            CallbackQueryHandler(admin_question_edit_start, pattern=r"^q:edit:\d+$"),
-        ],
-        states={QUESTION_TEXT:[MessageHandler(filters.TEXT & ~filters.COMMAND, admin_question_text)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_user=True,
-        per_chat=True,
-    )
-
     # ========================================================
     # التعميم
     # ========================================================
@@ -4050,7 +4071,6 @@ def main():
     app.add_handler(add_section_conv)
     app.add_handler(edit_account_conv)
 
-    app.add_handler(question_conv)
     app.add_handler(broadcast_conv)
 
     app.add_handler(dewan_conv)
@@ -4146,11 +4166,6 @@ def main():
             pattern=r"^m:sections$",
         )
     )
-
-    app.add_handler(CallbackQueryHandler(admin_section_action, pattern=r"^section_action:\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_section_questions, pattern=r"^q:section:\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_question_form, pattern=r"^q:form:\d+:[A-Za-z0-9_]+$"))
-    app.add_handler(CallbackQueryHandler(admin_question_toggle, pattern=r"^q:toggle:\d+$"))
 
     app.add_handler(
         CallbackQueryHandler(
