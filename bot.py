@@ -1,6 +1,9 @@
 import os
 import logging
 import html
+import asyncio
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from functools import wraps
@@ -113,7 +116,7 @@ DEFAULT_SECTIONS = [
 
     # تعميم
     BROADCAST_TEXT,
-) = range(37)
+) = range(36)
 
 
 # ============================================================
@@ -525,8 +528,9 @@ def welcome_keyboard():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-
+    # لا نمسح حالة المستخدم المسجل إلا إذا طلب تسجيل الخروج.
+    # تسجيل الدخول يبقى محفوظًا في قاعدة البيانات حتى يسجل المستخدم
+    # الخروج بنفسه أو يقوم المدير بطرده/تعطيله.
     if is_admin(update):
         await update.message.reply_text(
             WELCOME_TEXT,
@@ -541,6 +545,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ),
         )
+        return ConversationHandler.END
+
+    user = get_user(update.effective_user.id)
+
+    if user and user["enabled"]:
+        # المستخدم مسجل مسبقًا، ندخله مباشرة إلى قسمه.
+        context.user_data["user_id"] = user["id"]
+        await user_menu(update, context)
         return ConversationHandler.END
 
     await update.message.reply_text(
@@ -575,11 +587,11 @@ async def public_callback(update, context):
 # ============================================================
 
 async def setup_bot_commands(application):
+    # يظهر زر Start الرسمي في قائمة أوامر Telegram، ولا يحتاج المستخدم
+    # إلى كتابة /start يدويًا.
     await application.bot.set_my_commands(
         [
-            ("start", "بدء تشغيل النظام"),
-            ("login", "🔐 تسجيل الدخول"),
-            ("logout", "🚪 تسجيل الخروج"),
+            ("start", "🚀 بدء تشغيل النظام"),
         ]
     )
 
@@ -719,6 +731,11 @@ async def login_password(update, context):
 
 async def logout(update, context):
     uid = context.user_data.get("user_id")
+
+    if not uid and update.effective_user:
+        existing = get_user(update.effective_user.id)
+        if existing:
+            uid = existing["id"]
 
     if uid:
         conn = db()
@@ -1439,6 +1456,130 @@ async def admin_toggle_one(update, context):
 # ============================================================
 # تقارير المدير حسب الأقسام
 # ============================================================
+
+@admin_only
+async def admin_sessions(update, context):
+    q = update.callback_query
+    await q.answer()
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            sl.id,
+            sl.user_id,
+            sl.username,
+            sl.telegram_id,
+            sl.login_at,
+            sl.logout_at,
+            u.enabled,
+            u.module,
+            s.name AS section_name
+        FROM sessions_log sl
+        LEFT JOIN users u ON u.id = sl.user_id
+        LEFT JOIN sections s ON s.code = u.module
+        ORDER BY sl.login_at DESC
+        LIMIT 50
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        await q.message.reply_text("🕒 لا توجد جلسات مسجلة.")
+        return
+
+    for r in rows:
+        active = (
+            r["logout_at"] is None
+            and r["enabled"] is True
+            and r["telegram_id"] is not None
+        )
+
+        status = "🟢 متصل" if active else "⚪ منتهية"
+        section = r["section_name"] or r["module"] or "-"
+
+        text = (
+            f"👤 المستخدم: {html.escape(r['username'])}\n"
+            f"📂 القسم: {html.escape(section)}\n"
+            f"🕒 الدخول: {r['login_at']}\n"
+            f"🚪 الخروج: {r['logout_at'] or 'لم يسجل خروجًا'}\n"
+            f"الحالة: {status}"
+        )
+
+        buttons = []
+        if active and r["user_id"]:
+            buttons.append([
+                InlineKeyboardButton(
+                    "🚫 طرد المستخدم من البوت",
+                    callback_data=f"m:kick:{r['user_id']}",
+                )
+            ])
+
+        await q.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+        )
+
+
+@admin_only
+async def admin_kick_user(update, context):
+    q = update.callback_query
+    await q.answer()
+
+    uid = int(q.data.split(":")[2])
+    user = get_user_by_id(uid)
+
+    if not user:
+        await q.message.reply_text("❌ الحساب غير موجود.")
+        return
+
+    telegram_id = user["telegram_id"]
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE sessions_log
+        SET logout_at=CURRENT_TIMESTAMP
+        WHERE user_id=%s
+          AND logout_at IS NULL
+    """, (uid,))
+
+    cur.execute("""
+        UPDATE users
+        SET telegram_id=NULL
+        WHERE id=%s
+    """, (uid,))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if telegram_id:
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=(
+                    "🚫 تم إنهاء جلستك من قبل الإدارة.\n\n"
+                    "إذا كنت بحاجة إلى الدخول مجددًا، تواصل مع الإدارة."
+                ),
+            )
+        except Exception as exc:
+            log.warning(
+                "Could not notify kicked user %s: %s",
+                user["username"],
+                exc,
+            )
+
+    await q.message.reply_text(
+        f"🚫 تم طرد المستخدم {user['username']} من البوت بنجاح."
+    )
+
+    # عرض الجلسات من جديد
+    await admin_sessions(update, context)
+
 
 @admin_only
 async def admin_reports(update, context):
@@ -3264,6 +3405,100 @@ def start_health_server():
     )
 
 
+
+# ============================================================
+# التذكير اليومي الساعة 19:00 بتوقيت إسطنبول
+# ============================================================
+
+ISTANBUL_TZ = ZoneInfo("Europe/Istanbul")
+DAILY_REMINDER_TEXT = (
+    "السلام عليكم ورحمة الله وبركاته\n"
+    "حياكم الله يا إخوة\n"
+    "أين التقرير اليومي"
+)
+
+
+async def send_daily_reminder(application):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT username, telegram_id
+        FROM users
+        WHERE enabled=TRUE
+          AND telegram_id IS NOT NULL
+    """)
+    users = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    sent = 0
+    failed = 0
+
+    for user in users:
+        try:
+            await application.bot.send_message(
+                chat_id=user["telegram_id"],
+                text=DAILY_REMINDER_TEXT,
+            )
+            sent += 1
+        except Exception as exc:
+            failed += 1
+            log.warning(
+                "Daily reminder failed for %s: %s",
+                user["username"],
+                exc,
+            )
+
+    log.info(
+        "Daily reminder completed: sent=%s failed=%s",
+        sent,
+        failed,
+    )
+
+
+async def daily_reminder_loop(application):
+    # لا نعتمد على ساعة Render/UTC؛ الموعد دائمًا 19:00 بتوقيت إسطنبول.
+    while True:
+        now = datetime.now(ISTANBUL_TZ)
+        target = now.replace(
+            hour=19,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+        if target <= now:
+            target += timedelta(days=1)
+
+        wait_seconds = max(
+            1,
+            (target - now).total_seconds(),
+        )
+
+        log.info(
+            "Next daily reminder at %s",
+            target.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        )
+
+        try:
+            await asyncio.sleep(wait_seconds)
+            await send_daily_reminder(application)
+        except asyncio.CancelledError:
+            log.info("Daily reminder task cancelled.")
+            raise
+        except Exception:
+            log.exception("Daily reminder loop error.")
+            await asyncio.sleep(60)
+
+
+async def start_background_tasks(application):
+    application.create_task(
+        daily_reminder_loop(application),
+        name="daily-reminder",
+    )
+
+
+
 # ============================================================
 # main
 # ============================================================
@@ -3287,7 +3522,7 @@ def main():
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .post_init(setup_bot_commands)
+        .post_init(setup_background_tasks)
         .build()
     )
 
@@ -3880,6 +4115,13 @@ def main():
         CallbackQueryHandler(
             admin_sessions,
             pattern=r"^m:sessions$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_kick_user,
+            pattern=r"^m:kick:\d+$",
         )
     )
 
