@@ -1601,6 +1601,14 @@ async def admin_section_action(update, context):
         ],
         [
             InlineKeyboardButton(
+                "🗑 حذف القسم",
+                callback_data=(
+                    f"section:delete:{section_id}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 "👥 مستخدمو القسم",
                 callback_data=(
                     f"section:users:{section_id}"
@@ -1739,6 +1747,164 @@ async def admin_section_form(update, context):
         text,
         reply_markup=InlineKeyboardMarkup(kb),
     )
+
+
+@admin_only
+async def admin_section_delete_start(update, context):
+    q = update.callback_query
+    await q.answer()
+
+    try:
+        section_id = int(q.data.split(":")[2])
+    except (ValueError, IndexError):
+        await q.message.reply_text("❌ بيانات القسم غير صحيحة.")
+        return
+
+    section = get_section_by_id(section_id)
+
+    if not section:
+        await q.message.reply_text("❌ القسم غير موجود.")
+        return
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM users
+        WHERE module=%s
+        """,
+        (section["code"],),
+    )
+    total_users = cur.fetchone()["c"]
+
+    cur.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM section_questions
+        WHERE section_code=%s
+        """,
+        (section["code"],),
+    )
+    total_questions = cur.fetchone()["c"]
+
+    cur.close()
+    conn.close()
+
+    await q.message.reply_text(
+        "⚠️ تأكيد حذف القسم\n\n"
+        f"📂 القسم: {section['name']}\n"
+        f"🔤 الرمز: {section['code']}\n"
+        f"👥 حسابات القسم: {total_users}\n"
+        f"📝 أسئلة القسم: {total_questions}\n\n"
+        "⚠️ سيتم حذف القسم وأسئلة القسم، وحذف حسابات المستخدمين "
+        "المرتبطة بهذا القسم.\n"
+        "أما البيانات والتقارير السابقة المرتبطة بهذه الحسابات "
+        "فستبقى في قاعدة البيانات مع user_id = NULL.\n\n"
+        "هذا الإجراء لا يمكن التراجع عنه.",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ إلغاء",
+                        callback_data=f"section_action:{section_id}",
+                    ),
+                    InlineKeyboardButton(
+                        "🗑 نعم، احذف القسم",
+                        callback_data=f"section:delete_confirm:{section_id}",
+                    ),
+                ]
+            ]
+        ),
+    )
+
+
+@admin_only
+async def admin_section_delete_confirm(update, context):
+    q = update.callback_query
+    await q.answer()
+
+    try:
+        section_id = int(q.data.split(":")[2])
+    except (ValueError, IndexError):
+        await q.message.reply_text("❌ بيانات القسم غير صحيحة.")
+        return
+
+    conn = db()
+    cur = conn.cursor()
+
+    try:
+        cur.execute(
+            """
+            SELECT *
+            FROM sections
+            WHERE id=%s
+            FOR UPDATE
+            """,
+            (section_id,),
+        )
+        section = cur.fetchone()
+
+        if not section:
+            conn.rollback()
+            await q.message.reply_text("❌ القسم غير موجود.")
+            return
+
+        # حذف حسابات المستخدمين المرتبطة بالقسم.
+        # جداول البيانات تستخدم ON DELETE SET NULL، لذلك تبقى
+        # السجلات التاريخية دون ارتباط بحساب محذوف.
+        cur.execute(
+            """
+            DELETE FROM users
+            WHERE module=%s
+            """,
+            (section["code"],),
+        )
+        deleted_users = cur.rowcount
+
+        # section_questions تحذف تلقائيًا بسبب ON DELETE CASCADE.
+        cur.execute(
+            """
+            DELETE FROM sections
+            WHERE id=%s
+            """,
+            (section_id,),
+        )
+
+        if cur.rowcount != 1:
+            conn.rollback()
+            await q.message.reply_text("❌ تعذر حذف القسم.")
+            return
+
+        conn.commit()
+
+        await q.message.reply_text(
+            "✅ تم حذف القسم بنجاح.\n\n"
+            f"📂 القسم: {section['name']}\n"
+            f"👥 الحسابات المحذوفة: {deleted_users}\n"
+            "📝 تم حذف أسئلة القسم أيضًا."
+        )
+
+    except Exception:
+        conn.rollback()
+        log.exception("Failed to delete section")
+        await q.message.reply_text(
+            "❌ حدث خطأ أثناء حذف القسم. لم يتم تنفيذ الحذف."
+        )
+
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    await manager_menu(update, context)
 
 
 @admin_only
@@ -6855,6 +7021,20 @@ async def main():
         CallbackQueryHandler(
             admin_section_form,
             pattern=r"^section:form:\d+:[^:]+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_section_delete_start,
+            pattern=r"^section:delete:\d+$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_section_delete_confirm,
+            pattern=r"^section:delete_confirm:\d+$",
         )
     )
 
