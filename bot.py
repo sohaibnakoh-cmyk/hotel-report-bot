@@ -3459,13 +3459,13 @@ async def admin_clear_data_start(update, context):
 
 @admin_only
 async def admin_clear_data_confirm(update, context):
-
     q = update.callback_query
     await q.answer()
 
     conn = db()
     cur = conn.cursor()
 
+    # بيانات الفندق التشغيلية فقط. الحسابات والأقسام والأسئلة محفوظة.
     tables = (
         "dewan",
         "tenants",
@@ -3474,47 +3474,45 @@ async def admin_clear_data_confirm(update, context):
         "amn_afrad",
         "amn_alamlen",
         "generic_entries",
+        "sessions_log",
     )
 
+    deleted_counts = {}
+
     try:
-
         for table in tables:
-
-            cur.execute(
-                f'DELETE FROM "{table}"'
-            )
+            cur.execute(f'DELETE FROM "{table}"')
+            deleted_counts[table] = cur.rowcount
 
         conn.commit()
 
     except Exception:
-
         conn.rollback()
-
-        log.exception(
-            "Failed to clear operational data"
-        )
+        log.exception("Failed to clear hotel operational data")
 
         await q.message.reply_text(
-            "❌ تعذر مسح البيانات. "
-            "لم يتم تغيير شيء."
+            "❌ تعذر مسح البيانات.\n\n"
+            "لم يتم تغيير أي شيء."
         )
-
         return
 
     finally:
-
         cur.close()
         conn.close()
 
+    total_deleted = sum(deleted_counts.values())
+
     await q.message.reply_text(
-        "✅ تم مسح جميع البيانات التشغيلية والتقارير بنجاح.\n"
-        "الحسابات والأقسام والأسئلة محفوظة."
+        "✅ تم تصفير بيانات الفندق بنجاح.\n\n"
+        f"🗑 السجلات المحذوفة: {total_deleted}\n"
+        "👥 الحسابات: محفوظة\n"
+        "📂 الأقسام: محفوظة\n"
+        "📝 أسئلة النماذج: محفوظة\n"
+        "🕒 سجل الجلسات: تم تصفيره\n\n"
+        "يمكنك الآن بدء إدخال بيانات جديدة من الصفر."
     )
 
-    await manager_menu(
-        update,
-        context,
-    )
+    await manager_menu(update, context)
 
 
 # ============================================================
